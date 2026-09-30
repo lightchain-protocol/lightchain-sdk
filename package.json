@@ -20,7 +20,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test 'test/*.test.ts'",
     "abi": "node scripts/abi.ts",
-    "acceptance": "node scripts/acceptance.ts"
+    "acceptance": "node scripts/acceptance.ts",
+    "acceptance:x402": "node scripts/acceptance-x402.ts"
   },
   "dependencies": {
     "viem": "^2.47.6"

@@ -2,6 +2,13 @@
 export const jobRegistryAbi = [
   {
     "type": "function",
+    "name": "deposit",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
     "name": "depositAndAuthorize",
     "inputs": [
       {

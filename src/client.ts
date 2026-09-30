@@ -1,5 +1,6 @@
 import {
   type Address,
+  bytesToHex,
   type Chain,
   createPublicClient,
   createWalletClient,
@@ -22,6 +23,15 @@ export type LightchainOptions = {
   network: keyof typeof networks | Network;
   /** The wallet: it signs in to mint keys and pays for the keys it mints. */
   account: LocalAccount;
+  /** The HTTP client for the Developer API; the global fetch by default. */
+  fetch?: typeof fetch;
+  /** The chain's JSON-RPC transport; HTTP to the network's rpcUrl by default. */
+  transport?: Transport;
+} & (DelegatePayment | X402Payment);
+
+/** The default: `fetch` pays a 402 by authorizing the API's delegate, with a depositAndAuthorize transaction. */
+type DelegatePayment = {
+  payment?: 'delegate';
   /**
    * What one deposit made on a 402 sends, in wei. A 402 asking for more is
    * not paid. Default: the 402's minimum, one job's fee, so every job pays
@@ -30,14 +40,25 @@ export type LightchainOptions = {
   depositWei?: bigint;
   /** Told of every deposit the SDK makes on a 402. */
   onDeposit?: (deposit: Deposit) => void;
-  /** The HTTP client for the Developer API; the global fetch by default. */
-  fetch?: typeof fetch;
-  /** The chain's JSON-RPC transport; HTTP to the network's rpcUrl by default. */
-  transport?: Transport;
+};
+
+/**
+ * `fetch` pays each 402 with an x402 payment: a debit authorization the
+ * account signs against its own prepaid balance. No transaction, no delegate.
+ */
+type X402Payment = {
+  payment: 'x402';
+  /** The most one request may pay, in wei. A 402 asking for more is not paid. */
+  maxPaymentWei: bigint;
+  /** Told of every x402 payment the server settled. */
+  onPayment?: (payment: Payment) => void;
 };
 
 /** A depositAndAuthorize the SDK sent on a 402. */
 export type Deposit = { hash: Hex; value: bigint; delegate: Address };
+
+/** An x402 payment the SDK signed on a 402: the settlement transaction, which submitted the job, and the fee it debited. */
+export type Payment = { hash: Hex; amount: bigint };
 
 /** The wallet's prepaid balance; with a delegate, what that delegate may spend of it. */
 export type Balance = { balance: bigint; authorized?: boolean; allowance?: bigint };
@@ -80,12 +101,58 @@ type DelegateAccept = {
   instruction?: { contract?: unknown; function?: unknown; args?: unknown[]; minimum_value_wei?: unknown };
 };
 
+/** x402 PaymentRequirements of the `prepaid-debit` scheme, as the server sends them: untrusted until checked. */
+type X402Accept = {
+  scheme: 'prepaid-debit';
+  network?: unknown;
+  amount?: unknown;
+  asset?: unknown;
+  payTo?: unknown;
+  maxTimeoutSeconds?: unknown;
+  extra?: { name?: unknown; version?: unknown; facilitatorAddress?: unknown };
+};
+
 /** A /v1 402 body: OpenAI's error, with the ways to pay in `accepts`. */
-type PaymentRequired = { error?: { message?: string; code?: string; accepts?: DelegateAccept[] } };
+type PaymentRequired = { error?: { message?: string; code?: string; accepts?: (DelegateAccept | X402Accept)[] } };
+
+/** LightChain's x402 scheme (docs/x402/lightchain-scheme.md in the orchestrator): its EIP-712 domain and type. */
+const X402_SCHEME = 'prepaid-debit';
+const DEBIT_DOMAIN = { name: 'LightChain JobRegistry', version: '1' } as const;
+const DEBIT_AUTHORIZATION = {
+  DebitAuthorization: [
+    { name: 'payer', type: 'address' },
+    { name: 'payTo', type: 'address' },
+    { name: 'facilitator', type: 'address' },
+    { name: 'maxAmount', type: 'uint256' },
+    { name: 'deadline', type: 'uint256' },
+    { name: 'nonce', type: 'bytes32' },
+  ],
+} as const;
+/** The longest a signed authorization may stay valid: the scheme asks for 120 s. */
+const MAX_TIMEOUT_SECONDS = 600;
+
+/** x402 headers carry base64 of UTF-8 JSON. */
+const toBase64 = (json: string) => btoa(String.fromCharCode(...new TextEncoder().encode(json)));
+const fromBase64 = (text: string) => new TextDecoder().decode(Uint8Array.from(atob(text), (c) => c.charCodeAt(0)));
 
 /** Whether `value`, as the server sent it, is `address`. */
 function sameAddress(value: unknown, address: Address): boolean {
   return typeof value === 'string' && isAddress(value) && isAddressEqual(value, address);
+}
+
+/** The settlement a PAYMENT-RESPONSE header reports, if it reports one that succeeded. */
+function settlementOf(response: Response): Payment | undefined {
+  const header = response.headers.get('payment-response');
+  if (!header) return undefined;
+  try {
+    const { success, transaction, amount } = JSON.parse(fromBase64(header));
+    if (success === true && /^0x[0-9a-fA-F]{64}$/.test(transaction) && /^[0-9]+$/.test(amount)) {
+      return { hash: transaction, amount: BigInt(amount) };
+    }
+  } catch {
+    // An unreadable header leaves the answer as it is.
+  }
+  return undefined;
 }
 
 /** A key refused by the Developer API: the HTTP status, the body's code, and the body. */
@@ -118,6 +185,9 @@ export class Lightchain {
   readonly #walletClient: WalletClient<Transport, Chain, LocalAccount>;
   readonly #depositWei: bigint | undefined;
   readonly #onDeposit: ((deposit: Deposit) => void) | undefined;
+  /** Set in x402 mode only: then a 402 is paid by signing, never by a transaction. */
+  readonly #maxPaymentWei: bigint | undefined;
+  readonly #onPayment: ((payment: Payment) => void) | undefined;
   /** The last deposit sent: the next one waits for it. */
   #lastDeposit: Promise<unknown> = Promise.resolve();
 
@@ -129,8 +199,19 @@ export class Lightchain {
     // Called unbound: a browser's fetch refuses any other `this`.
     const fetch = options.fetch ?? globalThis.fetch;
     this.#fetch = (input, init) => fetch(input, init);
-    this.#depositWei = options.depositWei;
-    this.#onDeposit = options.onDeposit;
+    if (options.payment === 'x402') {
+      // No default: what a 402 may take is the builder's call.
+      if (typeof options.maxPaymentWei !== 'bigint' || options.maxPaymentWei <= 0n) {
+        throw new Error('payment "x402" needs maxPaymentWei: the most one request may pay, in wei.');
+      }
+      this.#maxPaymentWei = options.maxPaymentWei;
+      this.#onPayment = options.onPayment;
+    } else if (options.payment === undefined || options.payment === 'delegate') {
+      this.#depositWei = options.depositWei;
+      this.#onDeposit = options.onDeposit;
+    } else {
+      throw new Error(`payment is "delegate" or "x402", not ${JSON.stringify(options.payment)}.`);
+    }
     const chain = defineChain({
       id: this.network.chainId,
       name: `LightChain ${this.network.chainId}`,
@@ -144,13 +225,23 @@ export class Lightchain {
   }
 
   /**
-   * fetch, paying a 402 by itself. When the Developer API answers that the
-   * wallet behind the key has not paid (a `delegate` entry in the 402's
-   * `accepts`; other schemes are left alone), it sends that depositAndAuthorize
-   * from the account, once the 402 checks out against this network, and sends
-   * the request again. Every other answer comes back as it is, a 402 for a
-   * limit the key's owner set included. A 402 it does not pay comes back with
-   * the reason prepended to `error.message`. Give it to the OpenAI SDK as `fetch`.
+   * fetch, paying a 402 by itself, the way `payment` says. Give it to the
+   * OpenAI SDK as `fetch`.
+   *
+   * `delegate` (the default): when the Developer API answers that the wallet
+   * behind the key has not paid (a `delegate` entry in the 402's `accepts`), it
+   * sends that depositAndAuthorize from the account, once the 402 checks out
+   * against this network, and sends the request again.
+   *
+   * `x402`: when the 402 lists the `prepaid-debit` requirements, it signs a
+   * debit authorization for their amount against the account's prepaid
+   * balance, once they check out against this network and maxPaymentWei, and
+   * sends the request again with it in a PAYMENT-SIGNATURE header. It never
+   * sends a transaction.
+   *
+   * Every other answer comes back as it is, a 402 for a limit the key's owner
+   * set included. A 402 it does not pay comes back with the reason prepended
+   * to `error.message`.
    *
    * Each 402 pays its own deposit, so 402s that arrive together each pay one:
    * with a large depositWei, calls made together before the first deposit
@@ -162,13 +253,21 @@ export class Lightchain {
     const response = await this.#fetch(input, init);
     if (response.status !== 402) return response;
     const body = (await response.clone().json().catch(() => null)) as PaymentRequired | null;
-    const accept = body?.error?.accepts?.find((a) => a?.scheme === 'delegate');
-    if (!accept) return response;
+    const x402 = this.#maxPaymentWei !== undefined;
+    const accepts = body?.error?.accepts ?? [];
+    const accept = accepts.find((a) => a?.scheme === (x402 ? X402_SCHEME : 'delegate'));
+    // In x402 mode a 402 that only offers the delegate way is a missing payment too: say why it stays unpaid.
+    if (!accept && !(x402 && accepts.some((a) => a?.scheme === 'delegate'))) return response;
     await response.body?.cancel();
+    let payment: string | undefined;
     try {
-      const deposit = this.#checkDelegateOffer(accept);
-      const hash = await this.depositAndAuthorize(deposit.delegate, deposit.value);
-      this.#onDeposit?.({ hash, ...deposit });
+      if (!accept) throw new Error('payment is "x402", and the 402 offers no prepaid-debit payment.');
+      if (x402) payment = await this.#signPayment(accept as X402Accept);
+      else {
+        const deposit = this.#checkDelegateOffer(accept as DelegateAccept);
+        const hash = await this.depositAndAuthorize(deposit.delegate, deposit.value);
+        this.#onDeposit?.({ hash, ...deposit });
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       const refused = { ...body, error: { ...body!.error, message: `Not paid by the SDK: ${reason} ${body!.error!.message ?? ''}`.trim() } };
@@ -178,7 +277,14 @@ export class Lightchain {
     }
     // ponytail: sent again once. A 402 on that retry (the fee rose meanwhile)
     // comes back to the caller; loop, with a bound, if that shows up.
-    return this.#fetch(again, init);
+    if (payment === undefined) return this.#fetch(again, init);
+    // init's headers replace a Request's own, so they carry the payment either way.
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    headers.set('payment-signature', payment);
+    const paid = await this.#fetch(again, { ...init, headers });
+    const settled = settlementOf(paid);
+    if (settled) this.#onPayment?.(settled);
+    return paid;
   };
 
   /**
@@ -188,18 +294,30 @@ export class Lightchain {
    * Resolves with the transaction hash once it succeeded on chain.
    */
   depositAndAuthorize(delegate: Address, value: bigint): Promise<Hex> {
+    const registry = { address: this.network.jobRegistry, abi: jobRegistryAbi } as const;
+    return this.#send('depositAndAuthorize', () =>
+      this.#walletClient.writeContract({ ...registry, functionName: 'depositAndAuthorize', args: [delegate], value }),
+    );
+  }
+
+  /**
+   * Sends JobRegistry.deposit() with `value`: adds it to the wallet's prepaid
+   * balance and authorizes nobody. x402 payments are paid from it. Resolves
+   * with the transaction hash once it succeeded on chain.
+   */
+  deposit(value: bigint): Promise<Hex> {
+    const registry = { address: this.network.jobRegistry, abi: jobRegistryAbi } as const;
+    return this.#send('deposit', () => this.#walletClient.writeContract({ ...registry, functionName: 'deposit', value }));
+  }
+
+  /** Sends a transaction once the one before it is done, and waits for it to succeed. */
+  #send(name: string, write: () => Promise<Hex>): Promise<Hex> {
     // One at a time: each transaction reads the account's nonce, so two sent
     // together would take the same one.
     const sent = this.#lastDeposit.then(async () => {
-      const hash = await this.#walletClient.writeContract({
-        address: this.network.jobRegistry,
-        abi: jobRegistryAbi,
-        functionName: 'depositAndAuthorize',
-        args: [delegate],
-        value,
-      });
+      const hash = await write();
       const receipt = await this.#publicClient.waitForTransactionReceipt({ hash });
-      if (receipt.status !== 'success') throw new Error(`depositAndAuthorize ${hash} reverted.`);
+      if (receipt.status !== 'success') throw new Error(`${name} ${hash} reverted.`);
       return hash;
     });
     this.#lastDeposit = sent.catch(() => undefined);
@@ -238,6 +356,47 @@ export class Lightchain {
     if (this.#depositWei === undefined) return { delegate: to, value: minimum };
     if (minimum > this.#depositWei) throw new Error(`the 402 asks for ${minimum} wei, more than depositWei (${this.#depositWei}).`);
     return { delegate: to, value: this.#depositWei };
+  }
+
+  /**
+   * The PAYMENT-SIGNATURE for a 402's prepaid-debit requirements, once they
+   * name this network, its JobRegistry and the scheme's domain, and ask for
+   * at most maxPaymentWei: a debit authorization of that amount, valid for
+   * maxTimeoutSeconds, with a fresh random nonce.
+   */
+  async #signPayment(accept: X402Accept): Promise<string> {
+    const { network, asset, amount, payTo, maxTimeoutSeconds: timeout, extra } = accept;
+    const chain = `eip155:${this.network.chainId}`;
+    if (network !== chain) throw new Error(`the 402 is for network ${network}, not ${chain}.`);
+    if (!sameAddress(asset, this.network.jobRegistry)) {
+      throw new Error(`the 402 names ${asset}, not this network's JobRegistry ${this.network.jobRegistry}.`);
+    }
+    if (extra?.name !== DEBIT_DOMAIN.name || extra.version !== DEBIT_DOMAIN.version) {
+      throw new Error(`the 402 names the domain "${extra?.name}" version ${extra?.version}, not "${DEBIT_DOMAIN.name}" version ${DEBIT_DOMAIN.version}.`);
+    }
+    const facilitator = extra.facilitatorAddress;
+    if (typeof payTo !== 'string' || !isAddress(payTo) || typeof facilitator !== 'string' || !isAddress(facilitator)) {
+      throw new Error('the 402 does not name a payTo and a facilitatorAddress.');
+    }
+    if (typeof amount !== 'string' || !/^[0-9]+$/.test(amount)) throw new Error(`the 402's amount ${amount} is not an amount in wei.`);
+    const maxAmount = BigInt(amount);
+    if (maxAmount > this.#maxPaymentWei!) throw new Error(`the 402 asks for ${maxAmount} wei, more than maxPaymentWei (${this.#maxPaymentWei}).`);
+    if (typeof timeout !== 'number' || !Number.isInteger(timeout) || timeout < 1 || timeout > MAX_TIMEOUT_SECONDS) {
+      throw new Error(`the 402's maxTimeoutSeconds ${timeout} is not between 1 and ${MAX_TIMEOUT_SECONDS}.`);
+    }
+    // The cap is the amount asked, not maxPaymentWei: the server debits the fee, at most the cap.
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + timeout);
+    const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
+    const message = { payer: this.address, payTo, facilitator, maxAmount, deadline, nonce };
+    const signature = await this.#account.signTypedData({
+      domain: { ...DEBIT_DOMAIN, chainId: this.network.chainId, verifyingContract: this.network.jobRegistry },
+      types: DEBIT_AUTHORIZATION,
+      primaryType: 'DebitAuthorization',
+      message,
+    });
+    const authorization = { ...message, maxAmount: maxAmount.toString(), deadline: deadline.toString() };
+    // `accepted` is the requirements verbatim: the server compares them field by field.
+    return toBase64(JSON.stringify({ x402Version: 2, accepted: accept, payload: { signature, authorization } }));
   }
 
   /**

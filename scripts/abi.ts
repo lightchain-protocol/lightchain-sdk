@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const SOURCE = '../pkg/chain/abis/IJobRegistry.json';
-const FUNCTIONS = ['depositAndAuthorize', 'prepaidBalanceOf', 'isDelegateAuthorized', 'delegateAllowance'];
+const FUNCTIONS = ['deposit', 'depositAndAuthorize', 'prepaidBalanceOf', 'isDelegateAuthorized', 'delegateAllowance'];
 
 const abi: { type: string; name?: string }[] = JSON.parse(readFileSync(SOURCE, 'utf8'));
 const picked = FUNCTIONS.map((name) => {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { custom } from 'viem';
 
 /** One HTTP exchange recorded against the Developer API. */
-export type Exchange = { method: string; path: string; status: number; body?: unknown };
+export type Exchange = { method: string; path: string; status: number; body?: unknown; headers?: Record<string, string> };
 
 /**
  * A fetch that answers from recorded exchanges, in order, asserting each
@@ -21,7 +21,7 @@ export function replayHttp(exchanges: Exchange[]) {
     assert.equal(`${request.method} ${url.pathname}`, `${next.method} ${next.path.split('?')[0]}`);
     return new Response(next.body === undefined ? null : JSON.stringify(next.body), {
       status: next.status,
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...next.headers },
     });
   };
   return { fetch, sent, done: () => assert.equal(queue.length, 0, 'recorded exchanges left unused') };

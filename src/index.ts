@@ -8,5 +8,6 @@ export {
   LightchainError,
   type LightchainJob,
   type LightchainOptions,
+  type Payment,
 } from './client.ts';
 export { type Network, networks } from './networks.ts';

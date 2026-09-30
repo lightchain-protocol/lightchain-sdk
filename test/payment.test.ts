@@ -103,7 +103,7 @@ for (const [order, accepts] of [
   test(`pays the delegate entry listed ${order} an x402 entry, leaving the x402 one alone`, async () => {
     const http = replayHttp([withAccepts([...accepts]), completed]);
     const rpc = replayRpc(pay.rpc);
-    const lc = new Lightchain({ network, account, fetch: http.fetch, transport: rpc.transport });
+    const lc = new Lightchain({ network, account, fetch: http.fetch, transport: rpc.transport, payment: 'delegate' });
 
     const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
 
@@ -111,6 +111,7 @@ for (const [order, accepts] of [
     assert.deepEqual(sentTransactions(rpc.sent), [
       { to: network.jobRegistry.toLowerCase(), value: minimum, call: { functionName: 'depositAndAuthorize', args: [offer.delegate] } },
     ]);
+    assert.equal(http.sent[1].headers.get('payment-signature'), null, 'the delegate mode signs no x402 payment');
   });
 }
 
@@ -147,3 +148,15 @@ for (const [what, answer, reason, depositWei] of refusals) {
     assert.equal(rpc.sent.length, 0);
   });
 }
+
+test('deposits into the prepaid balance alone, authorizing no delegate: what x402 pays from', async () => {
+  const rpc = replayRpc(pay.rpc);
+  const lc = new Lightchain({ network, account, transport: rpc.transport });
+
+  const hash = await lc.deposit(minimum * 5n);
+
+  assert.equal(hash, pay.rpc.find((call) => call.method === 'eth_sendRawTransaction')?.result);
+  assert.deepEqual(sentTransactions(rpc.sent), [
+    { to: network.jobRegistry.toLowerCase(), value: minimum * 5n, call: { functionName: 'deposit', args: undefined } },
+  ]);
+});
