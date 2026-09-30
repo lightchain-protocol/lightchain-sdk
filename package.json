@@ -1,0 +1,32 @@
+{
+  "name": "@lightchain/sdk",
+  "version": "0.1.0-alpha.0",
+  "description": "Keys and money for the LightChain AI Developer API: mint an API key with a wallet, fund it, read the balance, and pay a 402 by itself.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'test/*.test.ts'",
+    "abi": "node scripts/abi.ts",
+    "acceptance": "node scripts/acceptance.ts"
+  },
+  "dependencies": {
+    "viem": "^2.47.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.15",
+    "openai": "^7.25.0",
+    "typescript": "^5.9.3"
+  }
+}

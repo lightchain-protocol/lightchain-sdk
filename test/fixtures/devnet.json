@@ -1,0 +1,10 @@
+{
+  "network": {
+    "chainId": 48221,
+    "apiUrl": "http://localhost:8090",
+    "rpcUrl": "http://localhost:8545",
+    "jobRegistry": "0x68B1D87F95878fE05B998F19b66F4baba5De1aed"
+  },
+  "privateKey": "0x4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356",
+  "apiKey": "lcai_q3UfvJdCYJUyY0ErRGTwa3qdxlGEQb0wBVHaBxkU0-k"
+}

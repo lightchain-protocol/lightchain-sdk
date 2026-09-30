@@ -1,0 +1,11 @@
+[
+  {
+    "method": "POST",
+    "path": "/api/api-keys",
+    "status": 409,
+    "body": {
+      "error": "api_key_limit",
+      "message": "A wallet may hold at most 25 active keys; revoke one first"
+    }
+  }
+]

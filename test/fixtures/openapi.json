@@ -1,0 +1,1362 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "LCAI Consumer API",
+    "description": "HTTP API for consumer auth, chat compatibility endpoints, gateway proxying, and protocol indexer access. The Developer API (the OpenAI-compatible /v1 routes, keyed by API keys) is under the Developer API and API keys tags.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/api-keys": {
+      "post": {
+        "operationId": "createApiKey",
+        "summary": "Mint an API key",
+        "tags": [
+          "API keys"
+        ],
+        "description": "Mints a key bound to the signed-in wallet. The response is the only one that ever carries the key.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "scope": {
+                    "default": "chat",
+                    "description": "chat may run completions; read may only list models.",
+                    "type": "string",
+                    "enum": [
+                      "chat",
+                      "read"
+                    ]
+                  },
+                  "spendCapWei": {
+                    "description": "Lifetime spend cap, in wei; none if omitted.",
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,77}$"
+                  },
+                  "requestsPerMinute": {
+                    "nullable": true,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 60
+                  },
+                  "concurrentSessions": {
+                    "nullable": true,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4
+                  },
+                  "dailySpendCapWei": {
+                    "description": "Spend cap per UTC day, in wei.",
+                    "nullable": true,
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,77}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The key, shown this once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "prefix",
+                    "name",
+                    "scope",
+                    "spendCapWei",
+                    "spentWei",
+                    "limits",
+                    "limitHits",
+                    "createdAt",
+                    "revokedAt",
+                    "key"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "prefix": {
+                      "type": "string",
+                      "description": "The start of the key, to recognise it by."
+                    },
+                    "name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "scope": {
+                      "type": "string",
+                      "enum": [
+                        "chat",
+                        "read"
+                      ],
+                      "description": "chat may run completions; read may only list models."
+                    },
+                    "spendCapWei": {
+                      "type": "string",
+                      "pattern": "^[0-9]+$",
+                      "description": "Lifetime spend cap; null is uncapped.",
+                      "nullable": true
+                    },
+                    "spentWei": {
+                      "type": "string",
+                      "pattern": "^[0-9]+$",
+                      "description": "Spent so far, counted against spendCapWei."
+                    },
+                    "limits": {
+                      "type": "object",
+                      "description": "The limits enforced: the key's own where its owner set them, the server's ceilings elsewhere.",
+                      "required": [
+                        "requestsPerMinute",
+                        "concurrentSessions",
+                        "dailySpendCapWei"
+                      ],
+                      "properties": {
+                        "requestsPerMinute": {
+                          "type": "integer"
+                        },
+                        "concurrentSessions": {
+                          "type": "integer",
+                          "description": "Completions in flight at once."
+                        },
+                        "dailySpendCapWei": {
+                          "type": "string",
+                          "pattern": "^[0-9]+$",
+                          "description": "Per UTC day; null is uncapped.",
+                          "nullable": true
+                        }
+                      }
+                    },
+                    "limitHits": {
+                      "type": "object",
+                      "description": "How often each limit has refused the key.",
+                      "required": [
+                        "rate",
+                        "concurrency",
+                        "dailySpend",
+                        "spendCap",
+                        "sessionOpens"
+                      ],
+                      "properties": {
+                        "rate": {
+                          "type": "integer"
+                        },
+                        "concurrency": {
+                          "type": "integer"
+                        },
+                        "dailySpend": {
+                          "type": "integer"
+                        },
+                        "spendCap": {
+                          "type": "integer"
+                        },
+                        "sessionOpens": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "revokedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
+                    },
+                    "key": {
+                      "type": "string",
+                      "description": "The API key (lcai_...)."
+                    }
+                  },
+                  "description": "The key, shown this once."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid (error validation_error), or its body is not JSON (error Bad Request).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "The request is invalid (error validation_error), or its body is not JSON (error Bad Request).",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or expired sign-in token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Missing or expired sign-in token.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The wallet holds as many active keys as it may (error api_key_limit); revoke one first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "The wallet holds as many active keys as it may (error api_key_limit); revoke one first.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many calls from this wallet (60 a minute).",
+            "headers": {
+              "retry-after": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the same call may pass."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Too many calls from this wallet (60 a minute).",
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "retryAfterSec"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "enum": [
+                        429
+                      ]
+                    },
+                    "error": {
+                      "type": "string",
+                      "enum": [
+                        "rate_limited"
+                      ]
+                    },
+                    "retryAfterSec": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listApiKeys",
+        "summary": "List API keys",
+        "tags": [
+          "API keys"
+        ],
+        "description": "Every key the signed-in wallet has minted, revoked ones included, newest first. Never the keys themselves.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The wallet's keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "The wallet's keys.",
+                  "type": "object",
+                  "required": [
+                    "keys"
+                  ],
+                  "properties": {
+                    "keys": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "prefix",
+                          "name",
+                          "scope",
+                          "spendCapWei",
+                          "spentWei",
+                          "limits",
+                          "limitHits",
+                          "createdAt",
+                          "revokedAt"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "prefix": {
+                            "type": "string",
+                            "description": "The start of the key, to recognise it by."
+                          },
+                          "name": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "scope": {
+                            "type": "string",
+                            "enum": [
+                              "chat",
+                              "read"
+                            ],
+                            "description": "chat may run completions; read may only list models."
+                          },
+                          "spendCapWei": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "Lifetime spend cap; null is uncapped.",
+                            "nullable": true
+                          },
+                          "spentWei": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "Spent so far, counted against spendCapWei."
+                          },
+                          "limits": {
+                            "type": "object",
+                            "description": "The limits enforced: the key's own where its owner set them, the server's ceilings elsewhere.",
+                            "required": [
+                              "requestsPerMinute",
+                              "concurrentSessions",
+                              "dailySpendCapWei"
+                            ],
+                            "properties": {
+                              "requestsPerMinute": {
+                                "type": "integer"
+                              },
+                              "concurrentSessions": {
+                                "type": "integer",
+                                "description": "Completions in flight at once."
+                              },
+                              "dailySpendCapWei": {
+                                "type": "string",
+                                "pattern": "^[0-9]+$",
+                                "description": "Per UTC day; null is uncapped.",
+                                "nullable": true
+                              }
+                            }
+                          },
+                          "limitHits": {
+                            "type": "object",
+                            "description": "How often each limit has refused the key.",
+                            "required": [
+                              "rate",
+                              "concurrency",
+                              "dailySpend",
+                              "spendCap",
+                              "sessionOpens"
+                            ],
+                            "properties": {
+                              "rate": {
+                                "type": "integer"
+                              },
+                              "concurrency": {
+                                "type": "integer"
+                              },
+                              "dailySpend": {
+                                "type": "integer"
+                              },
+                              "spendCap": {
+                                "type": "integer"
+                              },
+                              "sessionOpens": {
+                                "type": "integer"
+                              }
+                            }
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "revokedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "nullable": true
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or expired sign-in token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Missing or expired sign-in token.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many calls from this wallet (60 a minute).",
+            "headers": {
+              "retry-after": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the same call may pass."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Too many calls from this wallet (60 a minute).",
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "retryAfterSec"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "enum": [
+                        429
+                      ]
+                    },
+                    "error": {
+                      "type": "string",
+                      "enum": [
+                        "rate_limited"
+                      ]
+                    },
+                    "retryAfterSec": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "operationId": "createChatCompletion",
+        "summary": "Create a chat completion",
+        "tags": [
+          "Developer API"
+        ],
+        "description": "Runs the conversation as one job on chain, paid from the prepaid balance of the wallet behind the key.\n\nSampling parameters (`temperature`, `max_tokens`, `top_p`, ...) are accepted and ignored: each worker runs a model with its own settings.\n\nWith `stream: true` the answer comes as server-sent events: `chat.completion.chunk` objects, then `data: [DONE]`. A failure after the first chunk ends the stream with a `data: {\"error\": ...}` event instead of `[DONE]`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "messages": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "role": {
+                          "type": "string",
+                          "enum": [
+                            "system",
+                            "developer",
+                            "user",
+                            "assistant"
+                          ]
+                        },
+                        "content": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "minItems": 1,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "enum": [
+                                      "text"
+                                    ]
+                                  },
+                                  "text": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "text"
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "role",
+                        "content"
+                      ]
+                    },
+                    "description": "The conversation so far; the last message is the user turn."
+                  },
+                  "stream": {
+                    "nullable": true,
+                    "type": "boolean"
+                  },
+                  "conversation_id": {
+                    "description": "Names the thread. A preference only: the call goes back to the session that served the thread last, when it is free. A LightChain extension.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "model",
+                  "messages"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The answer, with the `lightchain` job it came from (also in the `x-lightchain` header).",
+            "headers": {
+              "x-lightchain": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The `lightchain` object, as JSON."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "object",
+                    "created",
+                    "model",
+                    "choices",
+                    "lightchain"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "chat.completion"
+                      ]
+                    },
+                    "created": {
+                      "type": "integer"
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "choices": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "index",
+                          "message",
+                          "logprobs",
+                          "finish_reason"
+                        ],
+                        "properties": {
+                          "index": {
+                            "type": "integer"
+                          },
+                          "logprobs": {
+                            "type": "object",
+                            "nullable": true
+                          },
+                          "message": {
+                            "type": "object",
+                            "required": [
+                              "role",
+                              "content",
+                              "refusal"
+                            ],
+                            "properties": {
+                              "role": {
+                                "type": "string",
+                                "enum": [
+                                  "assistant"
+                                ]
+                              },
+                              "content": {
+                                "type": "string"
+                              },
+                              "refusal": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            }
+                          },
+                          "finish_reason": {
+                            "type": "string",
+                            "enum": [
+                              "stop"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "lightchain": {
+                      "type": "object",
+                      "description": "The on-chain job that produced the answer.",
+                      "required": [
+                        "job_id",
+                        "session_id",
+                        "tx_hash",
+                        "worker"
+                      ],
+                      "properties": {
+                        "job_id": {
+                          "type": "string",
+                          "description": "JobRegistry job id, decimal."
+                        },
+                        "session_id": {
+                          "type": "string",
+                          "description": "Session id, decimal."
+                        },
+                        "tx_hash": {
+                          "type": "string",
+                          "description": "Hash of the transaction that submitted the job."
+                        },
+                        "worker": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-fA-F]{40}$",
+                          "description": "The worker that served the job."
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "description": "The JSON of one `data:` event; the last event is `data: [DONE]`, or an error.",
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "description": "A piece of the answer.",
+                      "required": [
+                        "id",
+                        "object",
+                        "created",
+                        "model",
+                        "choices"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "object": {
+                          "type": "string",
+                          "enum": [
+                            "chat.completion.chunk"
+                          ]
+                        },
+                        "created": {
+                          "type": "integer"
+                        },
+                        "model": {
+                          "type": "string"
+                        },
+                        "choices": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "index",
+                              "delta",
+                              "logprobs",
+                              "finish_reason"
+                            ],
+                            "properties": {
+                              "index": {
+                                "type": "integer"
+                              },
+                              "logprobs": {
+                                "type": "object",
+                                "nullable": true
+                              },
+                              "delta": {
+                                "type": "object",
+                                "properties": {
+                                  "role": {
+                                    "type": "string",
+                                    "enum": [
+                                      "assistant"
+                                    ]
+                                  },
+                                  "content": {
+                                    "type": "string"
+                                  },
+                                  "refusal": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                }
+                              },
+                              "finish_reason": {
+                                "type": "string",
+                                "enum": [
+                                  "stop",
+                                  null
+                                ],
+                                "nullable": true
+                              }
+                            }
+                          }
+                        },
+                        "lightchain": {
+                          "type": "object",
+                          "description": "On the last chunk only.",
+                          "required": [
+                            "job_id",
+                            "session_id",
+                            "tx_hash",
+                            "worker"
+                          ],
+                          "properties": {
+                            "job_id": {
+                              "type": "string",
+                              "description": "JobRegistry job id, decimal."
+                            },
+                            "session_id": {
+                              "type": "string",
+                              "description": "Session id, decimal."
+                            },
+                            "tx_hash": {
+                              "type": "string",
+                              "description": "Hash of the transaction that submitted the job."
+                            },
+                            "worker": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-fA-F]{40}$",
+                              "description": "The worker that served the job."
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "description": "The completion failed after its first chunk (e.g. code job_failed, stream_diverged).",
+                      "type": "object",
+                      "required": [
+                        "error"
+                      ],
+                      "properties": {
+                        "error": {
+                          "type": "object",
+                          "required": [
+                            "message",
+                            "type",
+                            "param",
+                            "code"
+                          ],
+                          "properties": {
+                            "message": {
+                              "type": "string"
+                            },
+                            "type": {
+                              "type": "string",
+                              "description": "OpenAI error type, e.g. invalid_request_error, insufficient_quota, requests."
+                            },
+                            "param": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "code": {
+                              "type": "string",
+                              "description": "Machine-readable reason; see each status.",
+                              "nullable": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid (code null), or the prompt is too large for one job (code context_length_exceeded).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "The request is invalid (code null), or the prompt is too large for one job (code context_length_exceeded).",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "message",
+                        "type",
+                        "param",
+                        "code"
+                      ],
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "description": "OpenAI error type, e.g. invalid_request_error, insufficient_quota, requests."
+                        },
+                        "param": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "code": {
+                          "type": "string",
+                          "description": "Machine-readable reason; see each status.",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown or revoked API key (code invalid_api_key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Missing, unknown or revoked API key (code invalid_api_key).",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "message",
+                        "type",
+                        "param",
+                        "code"
+                      ],
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "description": "OpenAI error type, e.g. invalid_request_error, insufficient_quota, requests."
+                        },
+                        "param": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "code": {
+                          "type": "string",
+                          "description": "Machine-readable reason; see each status.",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "The call cannot be paid. Codes: delegate_not_authorized, insufficient_balance, allowance_exhausted (with `accepts`); spend_cap_exceeded (with `spend_cap_wei`); daily_spend_cap_exceeded (with `daily_spend_cap_wei` and `retry-after`).",
+            "headers": {
+              "retry-after": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the same call may pass."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "The call cannot be paid. Codes: delegate_not_authorized, insufficient_balance, allowance_exhausted (with `accepts`); spend_cap_exceeded (with `spend_cap_wei`); daily_spend_cap_exceeded (with `daily_spend_cap_wei` and `retry-after`).",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "message",
+                        "type",
+                        "param",
+                        "code"
+                      ],
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "description": "OpenAI error type, e.g. invalid_request_error, insufficient_quota, requests."
+                        },
+                        "param": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "code": {
+                          "type": "string",
+                          "description": "Machine-readable reason; see each status.",
+                          "nullable": true
+                        },
+                        "accepts": {
+                          "type": "array",
+                          "description": "The ways to pay, one per scheme.",
+                          "items": {
+                            "type": "object",
+                            "description": "Pay from the wallet's prepaid balance through the API's delegate.",
+                            "required": [
+                              "scheme",
+                              "chain_id",
+                              "payer",
+                              "delegate",
+                              "instruction"
+                            ],
+                            "properties": {
+                              "scheme": {
+                                "type": "string",
+                                "enum": [
+                                  "delegate"
+                                ]
+                              },
+                              "chain_id": {
+                                "type": "integer"
+                              },
+                              "payer": {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-fA-F]{40}$",
+                                "description": "The wallet behind the key."
+                              },
+                              "delegate": {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-fA-F]{40}$",
+                                "description": "The API signer that submits jobs for the wallet."
+                              },
+                              "instruction": {
+                                "type": "object",
+                                "description": "The transaction the payer sends once, with at least `minimum_value_wei` attached.",
+                                "required": [
+                                  "contract",
+                                  "function",
+                                  "args",
+                                  "minimum_value_wei"
+                                ],
+                                "properties": {
+                                  "contract": {
+                                    "type": "string",
+                                    "pattern": "^0x[0-9a-fA-F]{40}$",
+                                    "description": "JobRegistry."
+                                  },
+                                  "function": {
+                                    "type": "string",
+                                    "enum": [
+                                      "depositAndAuthorize(address)"
+                                    ]
+                                  },
+                                  "args": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "minimum_value_wei": {
+                                    "type": "string",
+                                    "pattern": "^[0-9]+$",
+                                    "description": "An amount in wei, as a decimal string."
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "spend_cap_wei": {
+                          "type": "string",
+                          "pattern": "^[0-9]+$",
+                          "description": "The key's lifetime spend cap."
+                        },
+                        "daily_spend_cap_wei": {
+                          "type": "string",
+                          "pattern": "^[0-9]+$",
+                          "description": "The key's spend cap per UTC day."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key has the read scope (code insufficient_scope).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "The key has the read scope (code insufficient_scope).",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "message",
+                        "type",
+                        "param",
+                        "code"
+                      ],
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "description": "OpenAI error type, e.g. invalid_request_error, insufficient_quota, requests."
+                        },
+                        "param": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "code": {
+                          "type": "string",
+                          "description": "Machine-readable reason; see each status.",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No model by that name, or no worker serves it now (code model_not_found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "No model by that name, or no worker serves it now (code model_not_found).",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "message",
+                        "type",
+                        "param",
+                        "code"
+                      ],
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "description": "OpenAI error type, e.g. invalid_request_error, insufficient_quota, requests."
+                        },
+                        "param": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "code": {
+                          "type": "string",
+                          "description": "Machine-readable reason; see each status.",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit refused the call (code rate_limit_exceeded, concurrency_limit_exceeded or session_open_limit_exceeded). Retry after `retry-after` seconds.",
+            "headers": {
+              "retry-after": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the same call may pass."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "A limit refused the call (code rate_limit_exceeded, concurrency_limit_exceeded or session_open_limit_exceeded). Retry after `retry-after` seconds.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "message",
+                        "type",
+                        "param",
+                        "code"
+                      ],
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "description": "OpenAI error type, e.g. invalid_request_error, insufficient_quota, requests."
+                        },
+                        "param": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "code": {
+                          "type": "string",
+                          "description": "Machine-readable reason; see each status.",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed to answer (code null).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "The server failed to answer (code null).",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "message",
+                        "type",
+                        "param",
+                        "code"
+                      ],
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "description": "OpenAI error type, e.g. invalid_request_error, insufficient_quota, requests."
+                        },
+                        "param": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "code": {
+                          "type": "string",
+                          "description": "Machine-readable reason; see each status.",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The job failed (code job_failed).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "The job failed (code job_failed).",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "message",
+                        "type",
+                        "param",
+                        "code"
+                      ],
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "description": "OpenAI error type, e.g. invalid_request_error, insufficient_quota, requests."
+                        },
+                        "param": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "code": {
+                          "type": "string",
+                          "description": "Machine-readable reason; see each status.",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No worker took a new session in time (code no_worker_available; retry shortly), the chain's blob fee is above what this server pays (code blob_fee_too_high; retry later), or completions are off on this server (code not_configured).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "No worker took a new session in time (code no_worker_available; retry shortly), the chain's blob fee is above what this server pays (code blob_fee_too_high; retry later), or completions are off on this server (code not_configured).",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "message",
+                        "type",
+                        "param",
+                        "code"
+                      ],
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "description": "OpenAI error type, e.g. invalid_request_error, insufficient_quota, requests."
+                        },
+                        "param": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "code": {
+                          "type": "string",
+                          "description": "Machine-readable reason; see each status.",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
