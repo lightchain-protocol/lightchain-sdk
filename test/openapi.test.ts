@@ -6,7 +6,11 @@ import pay from './fixtures/pay-402.json' with { type: 'json' };
 
 type Schema = { required?: string[]; properties?: Record<string, Schema>; items?: Schema };
 
-/** The fields `schema` requires that `value` lacks, as paths. */
+/**
+ * The fields `schema` requires that `value` lacks, as paths.
+ * ponytail: required fields only, no types, $ref or oneOf; the published
+ * schemas are inline. Use a JSON Schema validator if they grow those.
+ */
 function missing(schema: Schema, value: unknown, at = '$'): string[] {
   if (Array.isArray(value)) return schema.items ? value.flatMap((v, i) => missing(schema.items!, v, `${at}[${i}]`)) : [];
   if (value === null || typeof value !== 'object') return [];

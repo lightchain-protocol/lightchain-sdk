@@ -31,11 +31,24 @@ function sentTransactions(sent: { method: string; params: unknown }[]) {
     });
 }
 
-/** The same 402 with its delegate offer changed. */
-function withOffer(change: (accept: Accept) => object): Exchange {
+/** The same 402 with `accepts` replaced. */
+function withAccepts(accepts: object[]): Exchange {
   const body = paymentRequired.body as { error: { accepts: Accept[] } };
-  return { ...paymentRequired, body: { error: { ...body.error, accepts: [change(offer)] } } };
+  return { ...paymentRequired, body: { error: { ...body.error, accepts } } };
 }
+const withOffer = (change: (accept: Accept) => object) => withAccepts([change(offer)]);
+
+// The x402 prepaid-debit requirements an API that takes x402 payments lists
+// after the delegate entry, shaped as consumer-api's own tests build them.
+const prepaidDebit = {
+  scheme: 'prepaid-debit',
+  network: `eip155:${network.chainId}`,
+  amount: offer.instruction.minimum_value_wei,
+  asset: network.jobRegistry,
+  payTo: offer.delegate,
+  maxTimeoutSeconds: 120,
+  extra: { name: 'LightChain JobRegistry', version: '1', facilitatorAddress: '0x976EA74026E726554dB657fA54763abd0C3a0aa9' },
+};
 
 test('pays a 402 with the depositAndAuthorize it names, then sends the request again', async () => {
   const http = replayHttp(pay.http as Exchange[]);
@@ -66,7 +79,7 @@ test('deposits depositWei when it is above the minimum', async () => {
   assert.equal(sentTransactions(rpc.sent)[0].value, minimum * 10n);
 });
 
-test('pays once for 402s that arrive together', async () => {
+test('pays each of 402s that arrive together, one deposit after the other', async () => {
   const http = replayHttp([paymentRequired, paymentRequired, completed, completed]);
   const rpc = replayRpc(pay.rpc);
   const lc = new Lightchain({ network, account, fetch: http.fetch, transport: rpc.transport });
@@ -75,8 +88,31 @@ test('pays once for 402s that arrive together', async () => {
   const responses = await Promise.all([lc.fetch(url, request), lc.fetch(url, request)]);
 
   assert.deepEqual(responses.map((r) => r.status), [200, 200]);
-  assert.equal(sentTransactions(rpc.sent).length, 1);
+  // Each deposit covers its own retry: one deposit of one job's fee would pay one of them.
+  assert.equal(sentTransactions(rpc.sent).length, 2);
+  const methods = rpc.sent.map((c) => c.method);
+  const first = methods.indexOf('eth_sendRawTransaction');
+  const second = methods.indexOf('eth_sendRawTransaction', first + 1);
+  assert.ok(methods.slice(first, second).includes('eth_getTransactionReceipt'), 'the second deposit waits for the first');
 });
+
+for (const [order, accepts] of [
+  ['before', [offer, prepaidDebit]],
+  ['after', [prepaidDebit, offer]],
+] as const) {
+  test(`pays the delegate entry listed ${order} an x402 entry, leaving the x402 one alone`, async () => {
+    const http = replayHttp([withAccepts([...accepts]), completed]);
+    const rpc = replayRpc(pay.rpc);
+    const lc = new Lightchain({ network, account, fetch: http.fetch, transport: rpc.transport });
+
+    const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(sentTransactions(rpc.sent), [
+      { to: network.jobRegistry.toLowerCase(), value: minimum, call: { functionName: 'depositAndAuthorize', args: [offer.delegate] } },
+    ]);
+  });
+}
 
 test('hands back a 402 that is not a missing payment, sending nothing', async () => {
   const http = replayHttp(spendCap as Exchange[]);

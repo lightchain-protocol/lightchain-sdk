@@ -16,6 +16,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "node --test 'test/*.test.ts'",
     "abi": "node scripts/abi.ts",

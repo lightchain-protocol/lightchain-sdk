@@ -13,7 +13,8 @@ export type Network = {
 export const networks = {
   // JobRegistry from scripts/mainnet/chat/manifest.mainnet.json (verified live 2026-09-09).
   // ponytail: the mainnet Developer API hostname is not decided; this is the
-  // production consumer-api name. Change it here once one is chosen.
+  // production consumer-api name, which serves an older API without the key
+  // routes and /v1 today. Change it here once one is chosen.
   mainnet: {
     chainId: 9200,
     apiUrl: 'https://chat-api.mainnet.lightchain.ai',

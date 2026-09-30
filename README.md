@@ -13,7 +13,7 @@ const client = new OpenAI({
 });
 
 const completion = await client.chat.completions.create({
-  model: "llama3-8b", // GET /v1/models lists the ones served now
+  model: "gemma4:e2b", // GET /v1/models lists the ones served now
   messages: [{ role: "user", content: "Say hello in five words." }],
 });
 console.log(completion.choices[0].message.content);
@@ -47,7 +47,7 @@ const { key } = await lc.createApiKey({ name: "backend-prod" });
 //    sends the depositAndAuthorize transaction from the wallet and retries.
 const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: key, fetch: lc.fetch });
 const completion = await openai.chat.completions.create({
-  model: "llama3-8b",
+  model: "gemma4:e2b",
   messages: [{ role: "user", content: "Say hello in five words." }],
 });
 
@@ -69,7 +69,11 @@ console.log(await lc.getBalance()); // { balance: 999...n }
 
 While the wallet has not paid, a completion answers `402` with the transaction to send in `error.accepts` (codes `delegate_not_authorized`, `insufficient_balance`, `allowance_exhausted`). `lc.fetch` sends that `depositAndAuthorize` with `depositWei`, or with the 402's minimum (one job's fee) when `depositWei` is not set, then sends the request again. `onDeposit` is told of every deposit it makes.
 
-Before sending anything it checks the 402 against the network it was given: the chain id, the wallet (the key must be this wallet's), and the contract (this network's JobRegistry). A 402 that fails a check, or asks for more than `depositWei`, is not paid: it comes back as a 402 with the reason at the start of `error.message`. A 402 for a limit you set (`spend_cap_exceeded`, `daily_spend_cap_exceeded`) comes back as it is. 402s that arrive together while a deposit is in flight wait for it instead of paying again.
+Before sending anything it checks the 402 against the network it was given: the chain id, the wallet (the key must be this wallet's), and the contract (this network's JobRegistry). A 402 that fails a check, or asks for more than `depositWei`, is not paid: it comes back as a 402 with the reason at the start of `error.message`. A 402 for a limit you set (`spend_cap_exceeded`, `daily_spend_cap_exceeded`) comes back as it is, and so do ways to pay the SDK does not take yet (the x402 `prepaid-debit` entry in `accepts`).
+
+The delegate and the fee come from the API: the SDK trusts the API it talks to for those, as it trusts it with your key. Set `depositWei` to bound what one 402 can make it send.
+
+Each 402 pays its own deposit, one transaction after the other. Calls made together before the first deposit lands each deposit `depositWei`; what one of them did not need stays in the prepaid balance, and `withdrawBalance` on the JobRegistry takes it back.
 
 ## Networks
 
@@ -80,7 +84,7 @@ Before sending anything it checks the 402 against the network it was given: the 
 | `mainnet` | 9200 | `https://chat-api.mainnet.lightchain.ai` (provisional) | `https://rpc.mainnet.lightchain.ai` | `0xfB15F90298e4CcD7106E76fFB5e520315cC42B0b` |
 | `testnet` | 8200 | `https://chat-api.testnet.lightchain.ai` | `https://rpc.testnet.lightchain.ai` | `0x531b3A87c5D785441B9cF55b98169F20FD9056a7` |
 
-The mainnet Developer API hostname is not decided yet; `chat-api.mainnet.lightchain.ai` is the production consumer API's name.
+The mainnet Developer API hostname is not decided yet. `chat-api.mainnet.lightchain.ai` is the production consumer API's name, but today it serves an older consumer API without the key routes and `/v1`: mainnet calls fail there until the Developer API is deployed behind it.
 
 ## Development
 

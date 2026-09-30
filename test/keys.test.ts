@@ -4,6 +4,7 @@ import { recoverMessageAddress, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { Lightchain, LightchainError } from '../src/index.ts';
 import devnet from './fixtures/devnet.json' with { type: 'json' };
+import keyLimit from './fixtures/key-limit-409.json' with { type: 'json' };
 import mint from './fixtures/mint-key.json' with { type: 'json' };
 import { replayHttp } from './replay.ts';
 
@@ -39,11 +40,7 @@ test('refuses to sign a sign-in message for another wallet', async () => {
 });
 
 test('raises a refused key route as a LightchainError with its status and code', async () => {
-  const http = replayHttp([
-    mint[0],
-    mint[1],
-    { method: 'POST', path: '/api/api-keys', status: 409, body: { error: 'api_key_limit', message: 'A wallet may hold at most 25 active keys; revoke one first' } },
-  ]);
+  const http = replayHttp([mint[0], mint[1], ...keyLimit]);
   const lc = new Lightchain({ network, account, fetch: http.fetch });
 
   const error = await lc.createApiKey().catch((e: unknown) => e);

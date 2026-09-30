@@ -83,6 +83,11 @@ type DelegateAccept = {
 /** A /v1 402 body: OpenAI's error, with the ways to pay in `accepts`. */
 type PaymentRequired = { error?: { message?: string; code?: string; accepts?: DelegateAccept[] } };
 
+/** Whether `value`, as the server sent it, is `address`. */
+function sameAddress(value: unknown, address: Address): boolean {
+  return typeof value === 'string' && isAddress(value) && isAddressEqual(value, address);
+}
+
 /** A key refused by the Developer API: the HTTP status, the body's code, and the body. */
 export class LightchainError extends Error {
   readonly status: number;
@@ -91,9 +96,9 @@ export class LightchainError extends Error {
 
   constructor(status: number, body: unknown) {
     // The key routes answer { error, message }; /v1 answers OpenAI's { error: { message, code } }.
-    const b = body as { error?: string | { code?: string | null; message?: string }; message?: string } | undefined;
-    const error = b?.error;
-    super((typeof error === 'object' ? error.message : b?.message) ?? `HTTP ${status}`);
+    const answer = body as { error?: string | { code?: string | null; message?: string }; message?: string } | undefined;
+    const error = answer?.error;
+    super((typeof error === 'object' ? error.message : answer?.message) ?? `HTTP ${status}`);
     this.name = 'LightchainError';
     this.status = status;
     this.code = (typeof error === 'object' ? error.code : error) ?? null;
@@ -109,12 +114,12 @@ export class Lightchain {
   readonly baseURL: string;
   readonly #account: LocalAccount;
   readonly #fetch: typeof fetch;
-  readonly #chain: PublicClient;
-  readonly #wallet: WalletClient<Transport, Chain, LocalAccount>;
+  readonly #publicClient: PublicClient;
+  readonly #walletClient: WalletClient<Transport, Chain, LocalAccount>;
   readonly #depositWei: bigint | undefined;
   readonly #onDeposit: ((deposit: Deposit) => void) | undefined;
-  /** The deposit in flight: 402s that arrive meanwhile wait for it instead of paying again. */
-  #paying: Promise<void> | undefined;
+  /** The last deposit sent: the next one waits for it. */
+  #lastDeposit: Promise<unknown> = Promise.resolve();
 
   constructor(options: LightchainOptions) {
     this.network = typeof options.network === 'string' ? networks[options.network] : options.network;
@@ -134,18 +139,23 @@ export class Lightchain {
     });
     const transport = options.transport ?? http(this.network.rpcUrl);
     // The chains make a block every 2 s; viem's default 4 s poll would idle through two.
-    this.#chain = createPublicClient({ chain, transport, pollingInterval: 1_000 });
-    this.#wallet = createWalletClient({ account: options.account, chain, transport });
+    this.#publicClient = createPublicClient({ chain, transport, pollingInterval: 1_000 });
+    this.#walletClient = createWalletClient({ account: options.account, chain, transport });
   }
 
   /**
    * fetch, paying a 402 by itself. When the Developer API answers that the
    * wallet behind the key has not paid (a `delegate` entry in the 402's
-   * `accepts`), it sends that depositAndAuthorize from the account, once the
-   * 402 checks out against this network, and sends the request again, once.
-   * Every other answer comes back as it is, a 402 for a limit the key's owner
-   * set included. A 402 it does not pay comes back with the reason prepended
-   * to `error.message`. Give it to the OpenAI SDK as `fetch`.
+   * `accepts`; other schemes are left alone), it sends that depositAndAuthorize
+   * from the account, once the 402 checks out against this network, and sends
+   * the request again. Every other answer comes back as it is, a 402 for a
+   * limit the key's owner set included. A 402 it does not pay comes back with
+   * the reason prepended to `error.message`. Give it to the OpenAI SDK as `fetch`.
+   *
+   * Each 402 pays its own deposit, so 402s that arrive together each pay one:
+   * with a large depositWei, calls made together before the first deposit
+   * lands deposit more than one of them needs. It stays in the wallet's
+   * prepaid balance.
    */
   fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const again = input instanceof Request ? input.clone() : input;
@@ -154,8 +164,11 @@ export class Lightchain {
     const body = (await response.clone().json().catch(() => null)) as PaymentRequired | null;
     const accept = body?.error?.accepts?.find((a) => a?.scheme === 'delegate');
     if (!accept) return response;
+    await response.body?.cancel();
     try {
-      await this.#pay(this.#checkDelegateOffer(accept));
+      const deposit = this.#checkDelegateOffer(accept);
+      const hash = await this.depositAndAuthorize(deposit.delegate, deposit.value);
+      this.#onDeposit?.({ hash, ...deposit });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       const refused = { ...body, error: { ...body!.error, message: `Not paid by the SDK: ${reason} ${body!.error!.message ?? ''}`.trim() } };
@@ -163,6 +176,8 @@ export class Lightchain {
       headers.delete('content-length');
       return new Response(JSON.stringify(refused), { status: 402, headers });
     }
+    // ponytail: sent again once. A 402 on that retry (the fee rose meanwhile)
+    // comes back to the caller; loop, with a bound, if that shows up.
     return this.#fetch(again, init);
   };
 
@@ -172,61 +187,57 @@ export class Lightchain {
    * to submit jobs for the wallet, and raises its allowance by `value`.
    * Resolves with the transaction hash once it succeeded on chain.
    */
-  async depositAndAuthorize(delegate: Address, value: bigint): Promise<Hex> {
-    const hash = await this.#wallet.writeContract({
-      address: this.network.jobRegistry,
-      abi: jobRegistryAbi,
-      functionName: 'depositAndAuthorize',
-      args: [delegate],
-      value,
+  depositAndAuthorize(delegate: Address, value: bigint): Promise<Hex> {
+    // One at a time: each transaction reads the account's nonce, so two sent
+    // together would take the same one.
+    const sent = this.#lastDeposit.then(async () => {
+      const hash = await this.#walletClient.writeContract({
+        address: this.network.jobRegistry,
+        abi: jobRegistryAbi,
+        functionName: 'depositAndAuthorize',
+        args: [delegate],
+        value,
+      });
+      const receipt = await this.#publicClient.waitForTransactionReceipt({ hash });
+      if (receipt.status !== 'success') throw new Error(`depositAndAuthorize ${hash} reverted.`);
+      return hash;
     });
-    const receipt = await this.#chain.waitForTransactionReceipt({ hash });
-    if (receipt.status !== 'success') throw new Error(`depositAndAuthorize ${hash} reverted.`);
-    return hash;
+    this.#lastDeposit = sent.catch(() => undefined);
+    return sent;
   }
 
   /** The wallet's prepaid balance, read from the chain; with `delegate`, also its authorization and allowance. */
   async getBalance(delegate?: Address): Promise<Balance> {
     const registry = { address: this.network.jobRegistry, abi: jobRegistryAbi } as const;
-    const balance = this.#chain.readContract({ ...registry, functionName: 'prepaidBalanceOf', args: [this.address] });
-    if (!delegate) return { balance: await balance };
-    const [b, authorized, allowance] = await Promise.all([
-      balance,
-      this.#chain.readContract({ ...registry, functionName: 'isDelegateAuthorized', args: [this.address, delegate] }),
-      this.#chain.readContract({ ...registry, functionName: 'delegateAllowance', args: [this.address, delegate] }),
+    const readBalance = this.#publicClient.readContract({ ...registry, functionName: 'prepaidBalanceOf', args: [this.address] });
+    if (!delegate) return { balance: await readBalance };
+    const [balance, authorized, allowance] = await Promise.all([
+      readBalance,
+      this.#publicClient.readContract({ ...registry, functionName: 'isDelegateAuthorized', args: [this.address, delegate] }),
+      this.#publicClient.readContract({ ...registry, functionName: 'delegateAllowance', args: [this.address, delegate] }),
     ]);
-    return { balance: b, authorized, allowance };
+    return { balance, authorized, allowance };
   }
 
   /** The deposit a 402's delegate offer asks for, once it names this network's JobRegistry and this wallet. */
   #checkDelegateOffer(accept: DelegateAccept): { delegate: Address; value: bigint } {
-    const { chain_id, payer, delegate, instruction: i } = accept;
+    const { chain_id, payer, delegate, instruction } = accept;
     if (chain_id !== this.network.chainId) throw new Error(`the 402 is for chain ${chain_id}, not ${this.network.chainId}.`);
-    if (typeof payer !== 'string' || !isAddress(payer) || !isAddressEqual(payer, this.address)) {
-      throw new Error(`the key belongs to another wallet (${payer}), not ${this.address}.`);
+    if (!sameAddress(payer, this.address)) throw new Error(`the key belongs to another wallet (${payer}), not ${this.address}.`);
+    if (!sameAddress(instruction?.contract, this.network.jobRegistry)) {
+      throw new Error(`the 402 names ${instruction?.contract}, not this network's JobRegistry ${this.network.jobRegistry}.`);
     }
-    if (typeof i?.contract !== 'string' || !isAddress(i.contract) || !isAddressEqual(i.contract, this.network.jobRegistry)) {
-      throw new Error(`the 402 names ${i?.contract}, not this network's JobRegistry ${this.network.jobRegistry}.`);
-    }
-    if (i.function !== 'depositAndAuthorize(address)' || typeof delegate !== 'string' || !isAddress(delegate) || i.args?.[0] !== delegate) {
+    const named = typeof delegate === 'string' && isAddress(delegate) && sameAddress(instruction?.args?.[0], delegate);
+    if (!named || instruction?.function !== 'depositAndAuthorize(address)') {
       throw new Error('the 402 does not name a depositAndAuthorize of its delegate.');
     }
-    if (typeof i.minimum_value_wei !== 'string' || !/^[0-9]+$/.test(i.minimum_value_wei)) {
-      throw new Error(`the 402's minimum ${i.minimum_value_wei} is not an amount in wei.`);
-    }
-    const minimum = BigInt(i.minimum_value_wei);
-    if (this.#depositWei === undefined) return { delegate, value: minimum };
+    const wei = instruction.minimum_value_wei;
+    if (typeof wei !== 'string' || !/^[0-9]+$/.test(wei)) throw new Error(`the 402's minimum ${wei} is not an amount in wei.`);
+    const minimum = BigInt(wei);
+    const to = delegate as Address; // checked above
+    if (this.#depositWei === undefined) return { delegate: to, value: minimum };
     if (minimum > this.#depositWei) throw new Error(`the 402 asks for ${minimum} wei, more than depositWei (${this.#depositWei}).`);
-    return { delegate, value: this.#depositWei };
-  }
-
-  #pay(deposit: { delegate: Address; value: bigint }): Promise<void> {
-    this.#paying ??= this.depositAndAuthorize(deposit.delegate, deposit.value)
-      .then((hash) => this.#onDeposit?.({ hash, ...deposit }))
-      .finally(() => {
-        this.#paying = undefined;
-      });
-    return this.#paying;
+    return { delegate: to, value: this.#depositWei };
   }
 
   /**
