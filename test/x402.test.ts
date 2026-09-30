@@ -211,3 +211,23 @@ test('refuses a payment mode it does not know', () => {
   const options = { network: 'testnet', account: privateKeyToAccount(payerKey), payment: 'X402' };
   assert.throws(() => new Lightchain(options as unknown as LightchainOptions), /"delegate" or "x402"/);
 });
+
+test('refuses the options of one mode in the other, so a cap is never silently ignored', () => {
+  const base = { network: 'testnet', account: privateKeyToAccount(payerKey) } as const;
+  assert.throws(() => new Lightchain({ ...base, maxPaymentWei: 1n } as unknown as LightchainOptions), /payment "x402"/);
+  assert.throws(() => new Lightchain({ ...base, onPayment: () => {} } as unknown as LightchainOptions), /payment "x402"/);
+  const x402Mode = { ...base, payment: 'x402', maxPaymentWei: 1n } as const;
+  assert.throws(() => new Lightchain({ ...x402Mode, depositWei: 1n } as unknown as LightchainOptions), /payment "delegate"/);
+});
+
+test('carries the payment on a Request sent again, keeping its own headers', async () => {
+  const http = replayHttp([paymentRequired(testnetRequirements), completed]);
+  const lc = new Lightchain({ network: 'testnet', ...x402(http.fetch) });
+
+  const response = await lc.fetch(new Request(`${lc.baseURL}/chat/completions`, request));
+
+  assert.equal(response.status, 200);
+  assert.equal(http.sent[1].headers.get('authorization'), 'Bearer lcai_test');
+  assert.equal(paymentOf(http.sent[1]).accepted.asset, testnetRequirements.asset);
+  assert.deepEqual(http.sent[1].body, http.sent[0].body);
+});

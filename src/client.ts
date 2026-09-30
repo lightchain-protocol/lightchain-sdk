@@ -40,6 +40,8 @@ type DelegatePayment = {
   depositWei?: bigint;
   /** Told of every deposit the SDK makes on a 402. */
   onDeposit?: (deposit: Deposit) => void;
+  maxPaymentWei?: never;
+  onPayment?: never;
 };
 
 /**
@@ -52,6 +54,8 @@ type X402Payment = {
   maxPaymentWei: bigint;
   /** Told of every x402 payment the server settled. */
   onPayment?: (payment: Payment) => void;
+  depositWei?: never;
+  onDeposit?: never;
 };
 
 /** A depositAndAuthorize the SDK sent on a 402. */
@@ -183,10 +187,12 @@ export class Lightchain {
   readonly #fetch: typeof fetch;
   readonly #publicClient: PublicClient;
   readonly #walletClient: WalletClient<Transport, Chain, LocalAccount>;
+  readonly #registry: { address: Address; abi: typeof jobRegistryAbi };
+  /** How a 402 is paid: by a transaction (delegate) or by a signature (x402), never both. */
+  readonly #payment: 'delegate' | 'x402';
   readonly #depositWei: bigint | undefined;
   readonly #onDeposit: ((deposit: Deposit) => void) | undefined;
-  /** Set in x402 mode only: then a 402 is paid by signing, never by a transaction. */
-  readonly #maxPaymentWei: bigint | undefined;
+  readonly #maxPaymentWei: bigint = 0n;
   readonly #onPayment: ((payment: Payment) => void) | undefined;
   /** The last deposit sent: the next one waits for it. */
   #lastDeposit: Promise<unknown> = Promise.resolve();
@@ -199,7 +205,11 @@ export class Lightchain {
     // Called unbound: a browser's fetch refuses any other `this`.
     const fetch = options.fetch ?? globalThis.fetch;
     this.#fetch = (input, init) => fetch(input, init);
+    this.#registry = { address: this.network.jobRegistry, abi: jobRegistryAbi };
+    // The mode is explicit: an option of the other mode would be silently ignored, so it is refused.
+    const given = (names: string[]) => names.filter((n) => (options as Record<string, unknown>)[n] !== undefined);
     if (options.payment === 'x402') {
+      if (given(['depositWei', 'onDeposit']).length) throw new Error('depositWei and onDeposit belong to payment "delegate".');
       // No default: what a 402 may take is the builder's call.
       if (typeof options.maxPaymentWei !== 'bigint' || options.maxPaymentWei <= 0n) {
         throw new Error('payment "x402" needs maxPaymentWei: the most one request may pay, in wei.');
@@ -207,11 +217,13 @@ export class Lightchain {
       this.#maxPaymentWei = options.maxPaymentWei;
       this.#onPayment = options.onPayment;
     } else if (options.payment === undefined || options.payment === 'delegate') {
+      if (given(['maxPaymentWei', 'onPayment']).length) throw new Error('maxPaymentWei and onPayment belong to payment "x402".');
       this.#depositWei = options.depositWei;
       this.#onDeposit = options.onDeposit;
     } else {
       throw new Error(`payment is "delegate" or "x402", not ${JSON.stringify(options.payment)}.`);
     }
+    this.#payment = options.payment ?? 'delegate';
     const chain = defineChain({
       id: this.network.chainId,
       name: `LightChain ${this.network.chainId}`,
@@ -253,13 +265,13 @@ export class Lightchain {
     const response = await this.#fetch(input, init);
     if (response.status !== 402) return response;
     const body = (await response.clone().json().catch(() => null)) as PaymentRequired | null;
-    const x402 = this.#maxPaymentWei !== undefined;
+    const x402 = this.#payment === 'x402';
     const accepts = body?.error?.accepts ?? [];
     const accept = accepts.find((a) => a?.scheme === (x402 ? X402_SCHEME : 'delegate'));
     // In x402 mode a 402 that only offers the delegate way is a missing payment too: say why it stays unpaid.
     if (!accept && !(x402 && accepts.some((a) => a?.scheme === 'delegate'))) return response;
     await response.body?.cancel();
-    let payment: string | undefined;
+    let payment = '';
     try {
       if (!accept) throw new Error('payment is "x402", and the 402 offers no prepaid-debit payment.');
       if (x402) payment = await this.#signPayment(accept as X402Accept);
@@ -277,7 +289,7 @@ export class Lightchain {
     }
     // ponytail: sent again once. A 402 on that retry (the fee rose meanwhile)
     // comes back to the caller; loop, with a bound, if that shows up.
-    if (payment === undefined) return this.#fetch(again, init);
+    if (!x402) return this.#fetch(again, init);
     // init's headers replace a Request's own, so they carry the payment either way.
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     headers.set('payment-signature', payment);
@@ -294,9 +306,8 @@ export class Lightchain {
    * Resolves with the transaction hash once it succeeded on chain.
    */
   depositAndAuthorize(delegate: Address, value: bigint): Promise<Hex> {
-    const registry = { address: this.network.jobRegistry, abi: jobRegistryAbi } as const;
     return this.#send('depositAndAuthorize', () =>
-      this.#walletClient.writeContract({ ...registry, functionName: 'depositAndAuthorize', args: [delegate], value }),
+      this.#walletClient.writeContract({ ...this.#registry, functionName: 'depositAndAuthorize', args: [delegate], value }),
     );
   }
 
@@ -306,8 +317,7 @@ export class Lightchain {
    * with the transaction hash once it succeeded on chain.
    */
   deposit(value: bigint): Promise<Hex> {
-    const registry = { address: this.network.jobRegistry, abi: jobRegistryAbi } as const;
-    return this.#send('deposit', () => this.#walletClient.writeContract({ ...registry, functionName: 'deposit', value }));
+    return this.#send('deposit', () => this.#walletClient.writeContract({ ...this.#registry, functionName: 'deposit', value }));
   }
 
   /** Sends a transaction once the one before it is done, and waits for it to succeed. */
@@ -326,7 +336,7 @@ export class Lightchain {
 
   /** The wallet's prepaid balance, read from the chain; with `delegate`, also its authorization and allowance. */
   async getBalance(delegate?: Address): Promise<Balance> {
-    const registry = { address: this.network.jobRegistry, abi: jobRegistryAbi } as const;
+    const registry = this.#registry;
     const readBalance = this.#publicClient.readContract({ ...registry, functionName: 'prepaidBalanceOf', args: [this.address] });
     if (!delegate) return { balance: await readBalance };
     const [balance, authorized, allowance] = await Promise.all([
@@ -380,7 +390,7 @@ export class Lightchain {
     }
     if (typeof amount !== 'string' || !/^[0-9]+$/.test(amount)) throw new Error(`the 402's amount ${amount} is not an amount in wei.`);
     const maxAmount = BigInt(amount);
-    if (maxAmount > this.#maxPaymentWei!) throw new Error(`the 402 asks for ${maxAmount} wei, more than maxPaymentWei (${this.#maxPaymentWei}).`);
+    if (maxAmount > this.#maxPaymentWei) throw new Error(`the 402 asks for ${maxAmount} wei, more than maxPaymentWei (${this.#maxPaymentWei}).`);
     if (typeof timeout !== 'number' || !Number.isInteger(timeout) || timeout < 1 || timeout > MAX_TIMEOUT_SECONDS) {
       throw new Error(`the 402's maxTimeoutSeconds ${timeout} is not between 1 and ${MAX_TIMEOUT_SECONDS}.`);
     }
