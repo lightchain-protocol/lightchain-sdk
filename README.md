@@ -1,84 +1,62 @@
 # @lightchain/sdk
 
-Keys and money for the LightChain AI Developer API. Completions need no SDK of ours: the Developer API is OpenAI-compatible, so any OpenAI SDK works once you change its base URL.
+The LightChain AI Developer API for TypeScript: it runs an API key against the right network, and, given a wallet, pays a `402` by itself. Completions go through the OpenAI SDK: the Developer API is OpenAI-compatible.
 
-## Completions: the OpenAI SDK
+```sh
+npm install @lightchain/sdk openai
+```
+
+## 1. Create a key in the chat: Developer → API keys
+
+The chat's Developer page (`/developer`) creates your API keys and lists them. A key carries a name, a scope (`chat` or `read`), rate limits and an optional lifetime spend cap. The key itself (`lcai_...`) is shown once: store it like a password. Every key you create spends from your one prepaid balance, which you top up in the chat.
+
+## 2. One bot, one API key
 
 ```ts
 import OpenAI from "openai";
+import { Lightchain } from "@lightchain/sdk";
 
-const client = new OpenAI({
-  baseURL: "https://chat-api.testnet.lightchain.ai/v1",
-  apiKey: process.env.LIGHTCHAIN_API_KEY, // lcai_...
-});
+const lc = new Lightchain({ network: "testnet", apiKey: process.env.LIGHTCHAIN_API_KEY! });
+const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: lc.apiKey, fetch: lc.fetch });
 
-const completion = await client.chat.completions.create({
+const completion = await openai.chat.completions.create({
   model: "gemma4:e2b", // GET /v1/models lists the ones served now
   messages: [{ role: "user", content: "Say hello in five words." }],
 });
 console.log(completion.choices[0].message.content);
 ```
 
-Each completion is one job on chain, paid from the prepaid LCAI balance of the wallet that minted the key. Its `lightchain` field (type `LightchainJob`) names the job: `job_id`, `session_id`, `tx_hash`, `worker`.
+This is the default pattern. The bot holds the key and nothing else: no wallet, no funds. The key's lifetime spend cap is the bot's budget. The funds stay in your prepaid balance, and you top it up in the chat. A leaked key is revoked in the chat and replaced, with no funds to move.
 
-## Keys and money: this SDK
+Each completion is one job on chain, paid from the prepaid balance of the wallet that created the key. Its `lightchain` field (type `LightchainJob`) names the job: `job_id`, `session_id`, `tx_hash`, `worker`. `dropped_messages`, when present, says how many of the conversation's oldest messages the job left out to fit what one job carries.
 
-```sh
-npm install @lightchain/sdk openai
-```
+Until the wallet behind the key has paid, and whenever its balance or allowance runs out, a call answers `402` (codes `delegate_not_authorized`, `insufficient_balance`, `allowance_exhausted`). `lc.fetch` hands it back as the API answered it, and the OpenAI SDK raises it as an `APIError`: a human tops up in the chat. Past the key's cap, the call answers `402` `spend_cap_exceeded`.
 
-The SDK holds a wallet key. It mints API keys with a wallet signature, deposits and authorizes the API to spend, reads the balance, and pays a `402` by itself: through the API's delegate (the default), or per request with x402 ([x402 mode](#x402-mode-pay-per-request)).
+## Automatic top-ups
+
+To run a bot unattended, give it the wallet behind the key as `account` (a viem local account). On a `402` for an empty balance or allowance, `lc.fetch` then sends the `depositAndAuthorize` the 402 names from that wallet, and sends the request again.
 
 ```ts
-import OpenAI from "openai";
 import { privateKeyToAccount } from "viem/accounts";
-import { Lightchain } from "@lightchain/sdk";
 
 const lc = new Lightchain({
   network: "testnet",
+  apiKey: process.env.LIGHTCHAIN_API_KEY!,
   account: privateKeyToAccount(process.env.WALLET_PRIVATE_KEY as `0x${string}`),
   depositWei: 10n ** 18n, // what one deposit sends: 1 LCAI
+  onDeposit: (d) => console.log(`deposited ${d.value} wei in ${d.hash}`),
 });
-
-// 1. Mint an API key: a Sign-In with Ethereum signature, no gas.
-const { key } = await lc.createApiKey({ name: "backend-prod" });
-
-// 2. Complete through the OpenAI SDK, with the SDK's fetch: on the first 402 it
-//    sends the depositAndAuthorize transaction from the wallet and retries.
-const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: key, fetch: lc.fetch });
-const completion = await openai.chat.completions.create({
-  model: "gemma4:e2b",
-  messages: [{ role: "user", content: "Say hello in five words." }],
-});
-
-// 3. Read the prepaid balance on chain.
-console.log(await lc.getBalance()); // { balance: 999...n }
 ```
 
-| Member | Does |
-| --- | --- |
-| `new Lightchain({ network, account, payment?, depositWei?, onDeposit?, maxPaymentWei?, onPayment?, keyless?, fetch?, transport? })` | `network` is `"mainnet"`, `"testnet"`, or your own `Network` (a devnet). `account` is a viem local account. `payment` is `"delegate"` (the default: `depositWei`, `onDeposit`) or `"x402"` (`maxPaymentWei`, required, `onPayment` and `keyless`). |
-| `createApiKey(input?)` | Signs in and mints a key bound to the wallet. `input`: `name`, `scope` (`chat` or `read`), `spendCapWei`, `requestsPerMinute`, `concurrentSessions`. The answer's `key` is shown this once. |
-| `signIn()` | The Sign-In with Ethereum token (one hour), for the other key routes (`GET`/`PATCH`/`DELETE /api/api-keys`). |
-| `fetch` | `fetch` that pays a `402` the way `payment` says and sends the request again, once. Give it to the OpenAI SDK. |
-| `depositAndAuthorize(delegate, value)` | Sends the transaction yourself: adds `value` to the balance, authorizes `delegate` (the API's signer) and raises its allowance by `value`. Resolves with the transaction hash once it succeeded. |
-| `deposit(value)` | Adds `value` to the prepaid balance and authorizes nobody: what x402 pays from. Resolves with the transaction hash once it succeeded. |
-| `getBalance(delegate?)` | The prepaid balance; with `delegate`, also whether it is authorized and its remaining allowance. |
-| `baseURL`, `address`, `network` | The OpenAI base URL, the wallet, the endpoints in use. |
-
-### Paying a 402 through the delegate
-
-This is the default mode, `payment: "delegate"`. While the wallet has not paid, a completion answers `402` with the transaction to send in `error.accepts` (codes `delegate_not_authorized`, `insufficient_balance`, `allowance_exhausted`). `lc.fetch` sends that `depositAndAuthorize` with `depositWei`, or with the 402's minimum (one job's fee) when `depositWei` is not set, then sends the request again. `onDeposit` is told of every deposit it makes.
-
-Before sending anything it checks the 402 against the network it was given: the chain id, the wallet (the key must be this wallet's), and the contract (this network's JobRegistry). A 402 that fails a check, or asks for more than `depositWei`, is not paid: it comes back as a 402 with the reason at the start of `error.message`. A 402 for the limit you set (`spend_cap_exceeded`) comes back as it is. This mode never signs an x402 payment: it leaves the `prepaid-debit` entry in `accepts` alone.
+The deposit is `depositWei`, or the 402's minimum (one job's fee) when `depositWei` is not set. Before sending anything, the SDK checks the 402 against the network it was given: the chain id, the wallet (the key must be this wallet's), and the contract (this network's JobRegistry). A 402 that fails a check, or asks for more than `depositWei`, is not paid: it comes back as a 402 with the reason at the start of `error.message`. A `spend_cap_exceeded` 402 comes back as it is.
 
 The delegate and the fee come from the API: the SDK trusts the API it talks to for those, as it trusts it with your key. Set `depositWei` to bound what one 402 can make it send.
 
 Each 402 pays its own deposit, one transaction after the other. Calls made together before the first deposit lands each deposit `depositWei`; what one of them did not need stays in the prepaid balance, and `withdrawBalance` on the JobRegistry takes it back.
 
-### x402 mode: pay per request
+## x402: pay per request
 
-With `payment: "x402"`, the SDK pays each call from the account's own prepaid balance with a signed debit authorization ([x402](https://x402.org), LightChain's `prepaid-debit` scheme). The account authorizes no delegate and sends no transaction per call; it deposits once.
+With `payment: "x402"`, the SDK pays each call from the account's own prepaid balance with a signed debit authorization ([x402](https://x402.org), LightChain's `prepaid-debit` scheme). The account authorizes no delegate and sends no transaction per call; it deposits once. It needs `account`, and either an API key or `keyless: true`.
 
 ```ts
 import OpenAI from "openai";
@@ -90,14 +68,13 @@ const lc = new Lightchain({
   account: privateKeyToAccount(process.env.WALLET_PRIVATE_KEY as `0x${string}`),
   payment: "x402",
   maxPaymentWei: 10n ** 16n, // required: the most one call may pay (0.01 LCAI)
+  keyless: true, // or apiKey: process.env.LIGHTCHAIN_API_KEY
   onPayment: (p) => console.log(`settled in ${p.hash}, ${p.amount} wei debited`),
 });
 
-// Once: fund the prepaid balance. deposit() authorizes nobody.
-await lc.deposit(10n ** 18n);
+await lc.deposit(10n ** 18n); // once: fund the prepaid balance; it authorizes nobody
 
-const { key } = await lc.createApiKey({ name: "agent" });
-const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: key, fetch: lc.fetch });
+const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: lc.apiKey, fetch: lc.fetch });
 const completion = await openai.chat.completions.create({
   model: "gemma4:e2b",
   messages: [{ role: "user", content: "Say hello in five words." }],
@@ -109,30 +86,31 @@ On a `402` whose `accepts` lists the `prepaid-debit` requirements, `lc.fetch` si
 
 Before signing, the SDK checks the requirements against the network it was given: `network` is `eip155:<chainId>`, `asset` is the network's JobRegistry, the signing domain is `LightChain JobRegistry` version `1`, `payTo` and `facilitatorAddress` are addresses, `maxTimeoutSeconds` is between 1 and 600, and `amount` is at most `maxPaymentWei`. Requirements that fail a check are not signed: the 402 comes back with the reason at the start of `error.message`. So does a 402 that offers only the delegate way (an API that takes no x402 payments).
 
-- **The modes do not mix.** x402 mode never sends `depositAndAuthorize`, and delegate mode never signs an x402 payment.
-- **A wallet with a delegate gets no 402 on its key.** Its calls are served through the delegate, in either mode; x402 mode pays only the calls the API asks it to pay. A `keyless` call names no wallet, so it is always asked to pay.
-- **The API key goes with every call, unless `keyless`.** It authenticates the call and holds it to the key's limits. The payer is the account, usually the wallet that minted the key.
+- **Keyless, no key at all.** `lc.fetch` drops the `Authorization` header, and `lc.apiKey` is a placeholder for the OpenAI SDK, which insists on one. The API answers every call `402` with the x402 requirements alone, the SDK pays it, and the account is held, as payer, to the API's per-payer limits instead of a key's: by default 30 requests a minute, one call in flight, and 1 LCAI a day.
+- **With a key,** `lc.fetch` sends it on every call: it authenticates the call and holds it to the key's limits. A key whose wallet has a delegate gets no 402, so x402 pays only the calls the API asks it to pay.
+- **The modes do not mix.** x402 mode never sends `depositAndAuthorize`, and the default mode never signs an x402 payment.
 - **A refused payment comes back as the API answered it** (for example `402` `insufficient_funds`, or `invalid_prepaid_debit_payload_expired`), with the x402 reason as `error.code`. The SDK does not pay it again. The Developer API's Payment page lists the codes and what to do about each.
 
-#### With no API key
+## Members
 
-Add `keyless: true` and skip the key: no sign-in, nothing minted. `lc.fetch` then drops the `Authorization` header, so the OpenAI SDK's `apiKey` can be any string (it insists on one). The API answers the call `402` with the x402 requirements alone, the SDK pays it, and the account is held, as payer, to the API's per-payer limits instead of a key's: by default 30 requests a minute, one call in flight, and 1 LCAI a day.
+| Mode | `apiKey` | `account` |
+| --- | --- | --- |
+| default (`payment: "delegate"`) | required | optional: with it, `fetch` pays a 402 (`depositWei`, `onDeposit`) |
+| `payment: "x402"` | required, unless `keyless: true` | required: it signs each payment (`maxPaymentWei`, required, `onPayment`) |
 
-```ts
-const lc = new Lightchain({ network: "testnet", account, payment: "x402", maxPaymentWei: 10n ** 16n, keyless: true });
-await lc.deposit(10n ** 18n); // once
-const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: "x402", fetch: lc.fetch });
-```
+The constructor throws on any other combination, and on an option the mode would ignore.
 
-## Agents: one bot, one wallet
+| Member | Does |
+| --- | --- |
+| `new Lightchain({ network, apiKey, account?, payment?, ..., fetch?, transport? })` | `network` is `"mainnet"`, `"testnet"`, or your own `Network` (a devnet). The other options are in the table above. |
+| `fetch` | `fetch` that sends `Authorization: Bearer <apiKey>` and, given an `account`, pays a `402` the way `payment` says and sends the request again, once. Give it to the OpenAI SDK. |
+| `baseURL`, `apiKey` | The OpenAI SDK's `baseURL` (the network's `/v1`) and `apiKey`. |
+| `getBalance(delegate?)` | The account's prepaid balance; with `delegate`, also whether it is authorized and its remaining allowance. Needs `account`. |
+| `deposit(value)` | Adds `value` to the account's prepaid balance and authorizes nobody: what x402 pays from. Needs `account`. |
+| `depositAndAuthorize(delegate, value)` | Adds `value` to the balance, authorizes `delegate` (the API's signer) and raises its allowance by `value`. Needs `account`. |
+| `address`, `network` | The account's address, if any, and the endpoints in use. |
 
-Give each bot a wallet of its own and an API key minted with a lifetime `spendCapWei`: that cap is the bot's budget. Past it the API answers `402` `spend_cap_exceeded`, which `fetch` does not pay. A leaked API key is revoked and replaced without moving funds.
-
-```ts
-const bot = new Lightchain({ network: "testnet", account: privateKeyToAccount(process.env.BOT_KEY as `0x${string}`) });
-const { key } = await bot.createApiKey({ name: "bot", spendCapWei: 5n * 10n ** 18n }); // the bot's budget: 5 LCAI
-const openai = new OpenAI({ baseURL: bot.baseURL, apiKey: key, fetch: bot.fetch });
-```
+`deposit` and `depositAndAuthorize` resolve with the transaction hash once it succeeded on chain.
 
 ## Networks
 
@@ -153,7 +131,7 @@ npm test            # unit tests against recorded devnet answers (Node >= 22.18)
 npm run typecheck
 npm run build       # dist/
 npm run abi         # regenerate src/abi.ts from ../pkg/chain/abis (after `make bindings`)
-WALLET_PRIVATE_KEY=0x... npm run acceptance   # end to end on testnet; see scripts/acceptance.ts
+WALLET_PRIVATE_KEY=0x... npm run acceptance   # a fresh wallet: the key alone gets its 402, then account pays it; see scripts/acceptance.ts
 WALLET_PRIVATE_KEY=0x... LIGHTCHAIN_MODEL=gemma4:e2b npm run acceptance:x402   # keyless x402 mode; see scripts/acceptance-x402.ts
 ```
 

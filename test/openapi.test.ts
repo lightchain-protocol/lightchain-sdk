@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import mint from './fixtures/mint-key.json' with { type: 'json' };
 import spec from './fixtures/openapi.json' with { type: 'json' };
 import pay from './fixtures/pay-402.json' with { type: 'json' };
 
@@ -25,7 +24,6 @@ const paths = spec.paths as Record<string, Record<string, { responses: Record<st
 const answer = (path: string, method: string, status: number) => paths[path][method].responses[status].content['application/json'].schema;
 
 test('the recorded answers carry every field the published OpenAPI document requires', () => {
-  assert.deepEqual(missing(answer('/api/api-keys', 'post', 201), mint[2].body), []);
   assert.deepEqual(missing(answer('/v1/chat/completions', 'post', 402), pay.http[0].body), []);
   assert.deepEqual(missing(answer('/v1/chat/completions', 'post', 200), pay.http[1].body), []);
 });

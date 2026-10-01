@@ -14,24 +14,31 @@ import {
   type Transport,
   type WalletClient,
 } from 'viem';
-import { parseSiweMessage } from 'viem/siwe';
 import { jobRegistryAbi } from './abi.ts';
 import { type Network, networks } from './networks.ts';
 
 export type LightchainOptions = {
   /** `mainnet`, `testnet`, or the endpoints of another network (a devnet). */
   network: keyof typeof networks | Network;
-  /** The wallet: it signs in to mint keys and pays for the keys it mints. */
-  account: LocalAccount;
   /** The HTTP client for the Developer API; the global fetch by default. */
   fetch?: typeof fetch;
   /** The chain's JSON-RPC transport; HTTP to the network's rpcUrl by default. */
   transport?: Transport;
 } & (DelegatePayment | X402Payment);
 
-/** The default: `fetch` pays a 402 by authorizing the API's delegate, with a depositAndAuthorize transaction. */
+/** The API key (`lcai_...`), created in the chat under Developer, API keys. `fetch` sends it with every call. */
+type ApiKey = string;
+
+/**
+ * The default. With an account, `fetch` pays a 402 by authorizing the API's
+ * delegate, with a depositAndAuthorize transaction; without one, the 402
+ * comes back to the caller, and the key's owner tops up in the chat.
+ */
 type DelegatePayment = {
   payment?: 'delegate';
+  apiKey: ApiKey;
+  /** A viem local account: the wallet behind the key, which pays a 402 by itself. */
+  account?: LocalAccount;
   /**
    * What one deposit made on a 402 sends, in wei. A 402 asking for more is
    * not paid. Default: the 402's minimum, one job's fee, so every job pays
@@ -51,19 +58,26 @@ type DelegatePayment = {
  */
 type X402Payment = {
   payment: 'x402';
+  /** A viem local account: it signs every payment. */
+  account: LocalAccount;
   /** The most one request may pay, in wei. A 402 asking for more is not paid. */
   maxPaymentWei: bigint;
   /** Told of every x402 payment the server settled. */
   onPayment?: (payment: Payment) => void;
-  /**
-   * Call with no API key: `fetch` drops the Authorization header the OpenAI
-   * SDK sends (it insists on some apiKey string), so the payment alone pays,
-   * and the API holds the account, as payer, to its per-payer limits.
-   */
-  keyless?: boolean;
   depositWei?: never;
   onDeposit?: never;
-};
+} & (
+  | { apiKey: ApiKey; keyless?: false }
+  | {
+      /**
+       * Call with no API key: `fetch` drops the Authorization header, so the
+       * payment alone pays, and the API holds the account, as payer, to its
+       * per-payer limits.
+       */
+      keyless: true;
+      apiKey?: never;
+    }
+);
 
 /** A depositAndAuthorize the SDK sent on a 402. */
 export type Deposit = { hash: Hex; value: bigint; delegate: Address };
@@ -74,33 +88,13 @@ export type Payment = { hash: Hex; amount: bigint };
 /** The wallet's prepaid balance; with a delegate, what that delegate may spend of it. */
 export type Balance = { balance: bigint; authorized?: boolean; allowance?: bigint };
 
-/** What a key's owner may set when minting it; wei amounts as bigint. */
-export type CreateApiKeyInput = {
-  name?: string;
-  /** `chat` (the default) may run completions; `read` may only list models. */
-  scope?: 'chat' | 'read';
-  /** What the key may spend in its lifetime. No cap if omitted. */
-  spendCapWei?: bigint;
-  requestsPerMinute?: number;
-  concurrentSessions?: number;
-};
-
-/** A key as the API lists it: never the key itself. Wei amounts are decimal strings. */
-export type ApiKey = {
-  id: string;
-  prefix: string;
-  name: string | null;
-  scope: 'chat' | 'read';
-  spendCapWei: string | null;
-  spentWei: string;
-  limits: { requestsPerMinute: number; concurrentSessions: number };
-  limitHits: Record<string, number>;
-  createdAt: string;
-  revokedAt: string | null;
-};
-
-/** The on-chain job behind a completion: its `lightchain` field, and the `x-lightchain` header as JSON. */
-export type LightchainJob = { job_id: string; session_id: string; tx_hash: Hex; worker: Address };
+/**
+ * The on-chain job behind a completion: its `lightchain` field, the
+ * `x-lightchain` header as JSON, and a stream's last chunk. `dropped_messages`:
+ * how many of the oldest messages the job left out to fit what one job
+ * carries; absent when it carried them all.
+ */
+export type LightchainJob = { job_id: string; session_id: string; tx_hash: Hex; worker: Address; dropped_messages?: number };
 
 /** The `delegate` way to pay a 402, as the server sends it: untrusted until checked. */
 type DelegateAccept = {
@@ -165,34 +159,19 @@ function settlementOf(response: Response): Payment | undefined {
   return undefined;
 }
 
-/** A key refused by the Developer API: the HTTP status, the body's code, and the body. */
-export class LightchainError extends Error {
-  readonly status: number;
-  readonly code: string | null;
-  readonly body: unknown;
-
-  constructor(status: number, body: unknown) {
-    // The key routes answer { error, message }; /v1 answers OpenAI's { error: { message, code } }.
-    const answer = body as { error?: string | { code?: string | null; message?: string }; message?: string } | undefined;
-    const error = answer?.error;
-    super((typeof error === 'object' ? error.message : answer?.message) ?? `HTTP ${status}`);
-    this.name = 'LightchainError';
-    this.status = status;
-    this.code = (typeof error === 'object' ? error.code : error) ?? null;
-    this.body = body;
-  }
-}
-
-/** Keys and money for the LightChain AI Developer API. Completions go through the OpenAI SDK at `baseURL`. */
+/** An API key and its money, for the LightChain AI Developer API. Completions go through the OpenAI SDK at `baseURL`. */
 export class Lightchain {
   readonly network: Network;
-  readonly address: Address;
+  /** The account's address, if there is an account. */
+  readonly address: Address | undefined;
   /** The OpenAI-compatible base URL, for the OpenAI SDK's `baseURL`. */
   readonly baseURL: string;
-  readonly #account: LocalAccount;
+  /** The API key, for the OpenAI SDK's `apiKey`; keyless, a placeholder that `fetch` never sends. */
+  readonly apiKey: string;
+  readonly #account: LocalAccount | undefined;
   readonly #fetch: typeof fetch;
   readonly #publicClient: PublicClient;
-  readonly #walletClient: WalletClient<Transport, Chain, LocalAccount>;
+  readonly #walletClient: WalletClient<Transport, Chain, LocalAccount> | undefined;
   readonly #registry: { address: Address; abi: typeof jobRegistryAbi };
   /** How a 402 is paid: by a transaction (delegate) or by a signature (x402), never both. */
   readonly #payment: 'delegate' | 'x402';
@@ -207,16 +186,19 @@ export class Lightchain {
   constructor(options: LightchainOptions) {
     this.network = typeof options.network === 'string' ? networks[options.network] : options.network;
     this.#account = options.account;
-    this.address = options.account.address;
+    this.address = options.account?.address;
     this.baseURL = `${this.network.apiUrl}/v1`;
     // Called unbound: a browser's fetch refuses any other `this`.
     const fetch = options.fetch ?? globalThis.fetch;
     this.#fetch = (input, init) => fetch(input, init);
     this.#registry = { address: this.network.jobRegistry, abi: jobRegistryAbi };
-    // The mode is explicit: an option of the other mode would be silently ignored, so it is refused.
+    // Who needs what: every mode takes apiKey, but x402 with keyless; x402
+    // needs account, to sign; the delegate mode takes one to pay its 402s.
+    // An option that would be silently ignored is refused.
     const given = (names: string[]) => names.filter((n) => (options as Record<string, unknown>)[n] !== undefined);
     if (options.payment === 'x402') {
       if (given(['depositWei', 'onDeposit']).length) throw new Error('depositWei and onDeposit belong to payment "delegate".');
+      if (!options.account) throw new Error('payment "x402" needs account: it signs each payment.');
       // No default: what a 402 may take is the builder's call.
       if (typeof options.maxPaymentWei !== 'bigint' || options.maxPaymentWei <= 0n) {
         throw new Error('payment "x402" needs maxPaymentWei: the most one request may pay, in wei.');
@@ -224,9 +206,13 @@ export class Lightchain {
       this.#maxPaymentWei = options.maxPaymentWei;
       this.#onPayment = options.onPayment;
       this.#keyless = options.keyless === true;
+      if (this.#keyless === (options.apiKey !== undefined)) throw new Error('payment "x402" takes apiKey or keyless: true, one of the two.');
     } else if (options.payment === undefined || options.payment === 'delegate') {
       if (given(['maxPaymentWei', 'onPayment', 'keyless']).length) {
         throw new Error('maxPaymentWei, onPayment and keyless belong to payment "x402".');
+      }
+      if (!options.account && given(['depositWei', 'onDeposit']).length) {
+        throw new Error('depositWei and onDeposit need account: the wallet that deposits on a 402.');
       }
       this.#depositWei = options.depositWei;
       this.#onDeposit = options.onDeposit;
@@ -234,6 +220,11 @@ export class Lightchain {
       throw new Error(`payment is "delegate" or "x402", not ${JSON.stringify(options.payment)}.`);
     }
     this.#payment = options.payment ?? 'delegate';
+    if (!this.#keyless && (typeof options.apiKey !== 'string' || !options.apiKey)) {
+      throw new Error('needs apiKey: a key created in the chat, under Developer, API keys.');
+    }
+    // The OpenAI SDK insists on some apiKey.
+    this.apiKey = options.apiKey ?? 'keyless';
     const chain = defineChain({
       id: this.network.chainId,
       name: `LightChain ${this.network.chainId}`,
@@ -243,17 +234,19 @@ export class Lightchain {
     const transport = options.transport ?? http(this.network.rpcUrl);
     // The chains make a block every 2 s; viem's default 4 s poll would idle through two.
     this.#publicClient = createPublicClient({ chain, transport, pollingInterval: 1_000 });
-    this.#walletClient = createWalletClient({ account: options.account, chain, transport });
+    this.#walletClient = options.account && createWalletClient({ account: options.account, chain, transport });
   }
 
   /**
-   * fetch, paying a 402 by itself, the way `payment` says. Give it to the
+   * fetch, sending the API key as `Authorization: Bearer` and, given an
+   * account, paying a 402 by itself, the way `payment` says. Give it to the
    * OpenAI SDK as `fetch`.
    *
    * `delegate` (the default): when the Developer API answers that the wallet
    * behind the key has not paid (a `delegate` entry in the 402's `accepts`), it
    * sends that depositAndAuthorize from the account, once the 402 checks out
-   * against this network, and sends the request again.
+   * against this network, and sends the request again. With no account, the
+   * 402 comes back as it is.
    *
    * `x402`: when the 402 lists the `prepaid-debit` requirements, it signs a
    * debit authorization for their amount against the account's prepaid
@@ -273,15 +266,16 @@ export class Lightchain {
    * prepaid balance.
    */
   fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    if (this.#keyless) {
-      // init's headers replace a Request's own, so this drops the key either way.
-      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-      headers.delete('authorization');
-      init = { ...init, headers };
-    }
+    // init's headers replace a Request's own, so this sets the key, or drops it, either way.
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    if (this.#keyless) headers.delete('authorization');
+    else headers.set('authorization', `Bearer ${this.apiKey}`);
+    init = { ...init, headers };
     const again = input instanceof Request ? input.clone() : input;
     const response = await this.#fetch(input, init);
-    if (response.status !== 402) return response;
+    const account = this.#account;
+    // No account, nothing to pay with: the 402 goes to the caller, and a human tops up in the chat.
+    if (response.status !== 402 || !account) return response;
     const body = (await response.clone().json().catch(() => null)) as PaymentRequired | null;
     const x402 = this.#payment === 'x402';
     const accepts = body?.error?.accepts ?? [];
@@ -292,9 +286,9 @@ export class Lightchain {
     let payment = '';
     try {
       if (!accept) throw new Error('payment is "x402", and the 402 offers no prepaid-debit payment.');
-      if (x402) payment = await this.#signPayment(accept as X402Accept);
+      if (x402) payment = await this.#signPayment(account, accept as X402Accept);
       else {
-        const deposit = this.#checkDelegateOffer(accept as DelegateAccept);
+        const deposit = this.#checkDelegateOffer(account.address, accept as DelegateAccept);
         const hash = await this.depositAndAuthorize(deposit.delegate, deposit.value);
         this.#onDeposit?.({ hash, ...deposit });
       }
@@ -308,10 +302,8 @@ export class Lightchain {
     // ponytail: sent again once. A 402 on that retry (the fee rose meanwhile)
     // comes back to the caller; loop, with a bound, if that shows up.
     if (!x402) return this.#fetch(again, init);
-    // init's headers replace a Request's own, so they carry the payment either way.
-    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     headers.set('payment-signature', payment);
-    const paid = await this.#fetch(again, { ...init, headers });
+    const paid = await this.#fetch(again, init);
     const settled = settlementOf(paid);
     if (settled) this.#onPayment?.(settled);
     return paid;
@@ -324,8 +316,8 @@ export class Lightchain {
    * Resolves with the transaction hash once it succeeded on chain.
    */
   depositAndAuthorize(delegate: Address, value: bigint): Promise<Hex> {
-    return this.#send('depositAndAuthorize', () =>
-      this.#walletClient.writeContract({ ...this.#registry, functionName: 'depositAndAuthorize', args: [delegate], value }),
+    return this.#send('depositAndAuthorize', (wallet) =>
+      wallet.writeContract({ ...this.#registry, functionName: 'depositAndAuthorize', args: [delegate], value }),
     );
   }
 
@@ -335,15 +327,17 @@ export class Lightchain {
    * with the transaction hash once it succeeded on chain.
    */
   deposit(value: bigint): Promise<Hex> {
-    return this.#send('deposit', () => this.#walletClient.writeContract({ ...this.#registry, functionName: 'deposit', value }));
+    return this.#send('deposit', (wallet) => wallet.writeContract({ ...this.#registry, functionName: 'deposit', value }));
   }
 
   /** Sends a transaction once the one before it is done, and waits for it to succeed. */
-  #send(name: string, write: () => Promise<Hex>): Promise<Hex> {
+  #send(name: string, write: (wallet: WalletClient<Transport, Chain, LocalAccount>) => Promise<Hex>): Promise<Hex> {
+    const wallet = this.#walletClient;
+    if (!wallet) return Promise.reject(new Error(`${name} needs account: the wallet that sends it.`));
     // One at a time: each transaction reads the account's nonce, so two sent
     // together would take the same one.
     const sent = this.#lastDeposit.then(async () => {
-      const hash = await write();
+      const hash = await write(wallet);
       const receipt = await this.#publicClient.waitForTransactionReceipt({ hash });
       if (receipt.status !== 'success') throw new Error(`${name} ${hash} reverted.`);
       return hash;
@@ -352,24 +346,26 @@ export class Lightchain {
     return sent;
   }
 
-  /** The wallet's prepaid balance, read from the chain; with `delegate`, also its authorization and allowance. */
+  /** The account's prepaid balance, read from the chain; with `delegate`, also its authorization and allowance. */
   async getBalance(delegate?: Address): Promise<Balance> {
+    const { address } = this;
+    if (!address) throw new Error('getBalance needs account: the wallet whose balance it reads.');
     const registry = this.#registry;
-    const readBalance = this.#publicClient.readContract({ ...registry, functionName: 'prepaidBalanceOf', args: [this.address] });
+    const readBalance = this.#publicClient.readContract({ ...registry, functionName: 'prepaidBalanceOf', args: [address] });
     if (!delegate) return { balance: await readBalance };
     const [balance, authorized, allowance] = await Promise.all([
       readBalance,
-      this.#publicClient.readContract({ ...registry, functionName: 'isDelegateAuthorized', args: [this.address, delegate] }),
-      this.#publicClient.readContract({ ...registry, functionName: 'delegateAllowance', args: [this.address, delegate] }),
+      this.#publicClient.readContract({ ...registry, functionName: 'isDelegateAuthorized', args: [address, delegate] }),
+      this.#publicClient.readContract({ ...registry, functionName: 'delegateAllowance', args: [address, delegate] }),
     ]);
     return { balance, authorized, allowance };
   }
 
-  /** The deposit a 402's delegate offer asks for, once it names this network's JobRegistry and this wallet. */
-  #checkDelegateOffer(accept: DelegateAccept): { delegate: Address; value: bigint } {
+  /** The deposit a 402's delegate offer asks for, once it names this network's JobRegistry and the wallet `payer`. */
+  #checkDelegateOffer(wallet: Address, accept: DelegateAccept): { delegate: Address; value: bigint } {
     const { chain_id, payer, delegate, instruction } = accept;
     if (chain_id !== this.network.chainId) throw new Error(`the 402 is for chain ${chain_id}, not ${this.network.chainId}.`);
-    if (!sameAddress(payer, this.address)) throw new Error(`the key belongs to another wallet (${payer}), not ${this.address}.`);
+    if (!sameAddress(payer, wallet)) throw new Error(`the key belongs to another wallet (${payer}), not ${wallet}.`);
     if (!sameAddress(instruction?.contract, this.network.jobRegistry)) {
       throw new Error(`the 402 names ${instruction?.contract}, not this network's JobRegistry ${this.network.jobRegistry}.`);
     }
@@ -392,7 +388,7 @@ export class Lightchain {
    * at most maxPaymentWei: a debit authorization of that amount, valid for
    * maxTimeoutSeconds, with a fresh random nonce.
    */
-  async #signPayment(accept: X402Accept): Promise<string> {
+  async #signPayment(account: LocalAccount, accept: X402Accept): Promise<string> {
     const { network, asset, amount, payTo, maxTimeoutSeconds: timeout, extra } = accept;
     const chain = `eip155:${this.network.chainId}`;
     if (network !== chain) throw new Error(`the 402 is for network ${network}, not ${chain}.`);
@@ -415,8 +411,8 @@ export class Lightchain {
     // The cap is the amount asked, not maxPaymentWei: the server debits the fee, at most the cap.
     const deadline = BigInt(Math.floor(Date.now() / 1000) + timeout);
     const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
-    const message = { payer: this.address, payTo, facilitator, maxAmount, deadline, nonce };
-    const signature = await this.#account.signTypedData({
+    const message = { payer: account.address, payTo, facilitator, maxAmount, deadline, nonce };
+    const signature = await account.signTypedData({
       domain: { ...DEBIT_DOMAIN, chainId: this.network.chainId, verifyingContract: this.network.jobRegistry },
       types: DEBIT_AUTHORIZATION,
       primaryType: 'DebitAuthorization',
@@ -425,47 +421,5 @@ export class Lightchain {
     const authorization = { ...message, maxAmount: maxAmount.toString(), deadline: deadline.toString() };
     // `accepted` is the requirements verbatim: the server compares them field by field.
     return toBase64(JSON.stringify({ x402Version: 2, accepted: accept, payload: { signature, authorization } }));
-  }
-
-  /**
-   * Signs in with the wallet (Sign-In with Ethereum: a message signature, no
-   * gas) and returns the token the key routes take as `Authorization: Bearer`.
-   * It lasts an hour.
-   */
-  async signIn(): Promise<string> {
-    const { message } = await this.#api<{ message: string }>(`/api/auth/challenge?address=${this.address}`);
-    // The server writes the message; sign only a sign-in for this wallet.
-    const { address } = parseSiweMessage(message);
-    if (!address || !isAddressEqual(address, this.address)) {
-      throw new Error(`The sign-in message is for another address (${address}), not ${this.address}; not signing it.`);
-    }
-    const signature = await this.#account.signMessage({ message });
-    const { token } = await this.#api<{ token: string }>('/api/auth/verify', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ message, signature }),
-    });
-    return token;
-  }
-
-  /**
-   * Mints an API key bound to the wallet, signing in first. `key` is in this
-   * answer only: store it like a password.
-   */
-  async createApiKey(input: CreateApiKeyInput = {}): Promise<ApiKey & { key: string }> {
-    const token = await this.signIn();
-    return this.#api('/api/api-keys', {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      // The API takes wei as decimal strings.
-      body: JSON.stringify(input, (_, v) => (typeof v === 'bigint' ? v.toString() : v)),
-    });
-  }
-
-  async #api<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await this.#fetch(`${this.network.apiUrl}${path}`, init);
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) throw new LightchainError(response.status, body);
-    return body as T;
   }
 }

@@ -1,50 +1,69 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { recoverMessageAddress, type Hex } from 'viem';
+import OpenAI from 'openai';
+import type { Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { Lightchain, LightchainError } from '../src/index.ts';
+import { Lightchain, type LightchainOptions } from '../src/index.ts';
 import devnet from './fixtures/devnet.json' with { type: 'json' };
-import keyLimit from './fixtures/key-limit-409.json' with { type: 'json' };
-import mint from './fixtures/mint-key.json' with { type: 'json' };
-import { replayHttp } from './replay.ts';
+import pay from './fixtures/pay-402.json' with { type: 'json' };
+import { type Exchange, replayHttp, replayRpc } from './replay.ts';
 
-const account = privateKeyToAccount(devnet.privateKey as Hex);
 const network = devnet.network as Lightchain['network'];
+const account = privateKeyToAccount(devnet.privateKey as Hex);
+const [paymentRequired, completed] = pay.http as [Exchange, Exchange];
 
-test('mints an API key from a wallet signature', async () => {
-  const http = replayHttp(mint);
-  const lc = new Lightchain({ network, account, fetch: http.fetch });
+test('a client with only an API key completes through the OpenAI SDK', async () => {
+  const http = replayHttp([completed]);
+  const lc = new Lightchain({ network, apiKey: devnet.apiKey, fetch: http.fetch });
+  const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: lc.apiKey, fetch: lc.fetch });
 
-  const created = await lc.createApiKey({ name: 'sdk-test', spendCapWei: 5_000_000_000_000_000_000n });
+  const completion = await openai.chat.completions.create({
+    model: 'llama3-8b',
+    messages: [{ role: 'user', content: 'Say hello in five words.' }],
+  });
 
-  assert.equal(created.key, (mint[2].body as { key: string }).key);
-  assert.equal(created.scope, 'chat');
-  const [challenge, verify, keys] = http.sent;
-  assert.equal(new URL(challenge.path, network.apiUrl).searchParams.get('address'), account.address);
-  const { message, signature } = verify.body as { message: string; signature: Hex };
-  assert.equal(message, (mint[0].body as { message: string }).message);
-  assert.equal(await recoverMessageAddress({ message, signature }), account.address);
-  assert.equal(keys.headers.get('authorization'), `Bearer ${(mint[1].body as { token: string }).token}`);
-  assert.deepEqual(keys.body, { name: 'sdk-test', spendCapWei: '5000000000000000000' });
+  assert.equal(completion.choices[0].message.content, 'Hello, how are you today?');
+  assert.equal(http.sent[0].path, '/v1/chat/completions');
+  assert.equal(http.sent[0].headers.get('authorization'), `Bearer ${devnet.apiKey}`);
   http.done();
 });
 
-test('refuses to sign a sign-in message for another wallet', async () => {
-  const challenge = mint[0].body as { message: string; nonce: string };
-  const other = challenge.message.replace(account.address, '0x000000000000000000000000000000000000dEaD');
-  const http = replayHttp([{ ...mint[0], body: { ...challenge, message: other } }]);
-  const lc = new Lightchain({ network, account, fetch: http.fetch });
+test('without an account, hands back the 402 of an unpaid wallet as it is, sending nothing', async () => {
+  const http = replayHttp([paymentRequired]);
+  const rpc = replayRpc([]);
+  const lc = new Lightchain({ network, apiKey: devnet.apiKey, fetch: http.fetch, transport: rpc.transport });
 
-  await assert.rejects(lc.createApiKey(), /another address/);
-  assert.equal(http.sent.length, 1, 'nothing was signed or sent after the challenge');
+  const response = await lc.fetch(`${lc.baseURL}/chat/completions`, { method: 'POST', body: '{}' });
+
+  assert.equal(response.status, 402);
+  assert.deepEqual(await response.json(), paymentRequired.body);
+  assert.deepEqual(rpc.sent, []);
+  assert.equal(http.sent[0].headers.get('authorization'), `Bearer ${devnet.apiKey}`, 'fetch sends the key by itself');
+  http.done();
 });
 
-test('raises a refused key route as a LightchainError with its status and code', async () => {
-  const http = replayHttp([mint[0], mint[1], ...keyLimit]);
-  const lc = new Lightchain({ network, account, fetch: http.fetch });
+const x402 = { payment: 'x402', maxPaymentWei: 1n } as const;
+const misconfigured: [string, object, RegExp][] = [
+  ['the delegate mode with no API key', { account }, /needs apiKey/],
+  ['an empty API key', { apiKey: '' }, /needs apiKey/],
+  ['depositWei with no account to deposit from', { apiKey: 'lcai_x', depositWei: 1n }, /need account/],
+  ['onDeposit with no account to deposit from', { apiKey: 'lcai_x', onDeposit: () => {} }, /need account/],
+  ['x402 with no account to sign', { ...x402, apiKey: 'lcai_x' }, /payment "x402" needs account/],
+  ['x402 with an API key and keyless both', { ...x402, account, apiKey: 'lcai_x', keyless: true }, /apiKey or keyless/],
+  ['x402 with neither an API key nor keyless', { ...x402, account }, /apiKey or keyless/],
+];
+for (const [what, options, reason] of misconfigured) {
+  test(`refuses ${what}`, () => {
+    assert.throws(() => new Lightchain({ network, ...options } as LightchainOptions), reason);
+  });
+}
 
-  const error = await lc.createApiKey().catch((e: unknown) => e);
-  assert.ok(error instanceof LightchainError);
-  assert.equal(error.status, 409);
-  assert.equal(error.code, 'api_key_limit');
+test('sends no transaction and reads no balance without an account', async () => {
+  const rpc = replayRpc([]);
+  const lc = new Lightchain({ network, apiKey: devnet.apiKey, transport: rpc.transport });
+
+  await assert.rejects(lc.deposit(1n), /deposit needs account/);
+  await assert.rejects(lc.depositAndAuthorize(account.address, 1n), /depositAndAuthorize needs account/);
+  await assert.rejects(lc.getBalance(), /getBalance needs account/);
+  assert.deepEqual(rpc.sent, []);
 });

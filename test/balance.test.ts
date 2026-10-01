@@ -13,7 +13,7 @@ const network = devnet.network as Lightchain['network'];
 
 test("reads the wallet's prepaid balance from the JobRegistry", async () => {
   const rpc = replayRpc(balance.rpc);
-  const lc = new Lightchain({ network, account, transport: rpc.transport });
+  const lc = new Lightchain({ network, apiKey: devnet.apiKey, account, transport: rpc.transport });
 
   assert.deepEqual(await lc.getBalance(), { balance: 2_500_000_000_000_000_000n });
   assert.deepEqual(rpc.sent.map((c) => (c.params as [{ to: string }])[0].to), [network.jobRegistry]);
@@ -21,7 +21,7 @@ test("reads the wallet's prepaid balance from the JobRegistry", async () => {
 
 test("reads the delegate's authorization and allowance along with the balance", async () => {
   const rpc = replayRpc(balance.rpc);
-  const lc = new Lightchain({ network, account, transport: rpc.transport });
+  const lc = new Lightchain({ network, apiKey: devnet.apiKey, account, transport: rpc.transport });
 
   assert.deepEqual(await lc.getBalance(balance.delegate as Hex), {
     balance: 2_500_000_000_000_000_000n,

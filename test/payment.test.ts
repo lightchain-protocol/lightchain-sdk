@@ -54,7 +54,7 @@ test('pays a 402 with the depositAndAuthorize it names, then sends the request a
   const http = replayHttp(pay.http as Exchange[]);
   const rpc = replayRpc(pay.rpc);
   const deposits: unknown[] = [];
-  const lc = new Lightchain({ network, account, fetch: http.fetch, transport: rpc.transport, onDeposit: (d) => deposits.push(d) });
+  const lc = new Lightchain({ network, apiKey: devnet.apiKey, account, fetch: http.fetch, transport: rpc.transport, onDeposit: (d) => deposits.push(d) });
 
   const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
 
@@ -66,13 +66,14 @@ test('pays a 402 with the depositAndAuthorize it names, then sends the request a
   const hash = pay.rpc.find((call) => call.method === 'eth_sendRawTransaction')?.result;
   assert.deepEqual(deposits, [{ hash, value: minimum, delegate: offer.delegate }]);
   assert.deepEqual(http.sent[1].body, http.sent[0].body, 'the retry sends the same request');
+  assert.equal(http.sent[1].headers.get('authorization'), `Bearer ${devnet.apiKey}`, 'with the key');
   http.done();
 });
 
 test('deposits depositWei when it is above the minimum', async () => {
   const http = replayHttp(pay.http as Exchange[]);
   const rpc = replayRpc(pay.rpc);
-  const lc = new Lightchain({ network, account, fetch: http.fetch, transport: rpc.transport, depositWei: minimum * 10n });
+  const lc = new Lightchain({ network, apiKey: devnet.apiKey, account, fetch: http.fetch, transport: rpc.transport, depositWei: minimum * 10n });
 
   await lc.fetch(`${lc.baseURL}/chat/completions`, request);
 
@@ -82,7 +83,7 @@ test('deposits depositWei when it is above the minimum', async () => {
 test('pays each of 402s that arrive together, one deposit after the other', async () => {
   const http = replayHttp([paymentRequired, paymentRequired, completed, completed]);
   const rpc = replayRpc(pay.rpc);
-  const lc = new Lightchain({ network, account, fetch: http.fetch, transport: rpc.transport });
+  const lc = new Lightchain({ network, apiKey: devnet.apiKey, account, fetch: http.fetch, transport: rpc.transport });
 
   const url = `${lc.baseURL}/chat/completions`;
   const responses = await Promise.all([lc.fetch(url, request), lc.fetch(url, request)]);
@@ -103,7 +104,7 @@ for (const [order, accepts] of [
   test(`pays the delegate entry listed ${order} an x402 entry, leaving the x402 one alone`, async () => {
     const http = replayHttp([withAccepts([...accepts]), completed]);
     const rpc = replayRpc(pay.rpc);
-    const lc = new Lightchain({ network, account, fetch: http.fetch, transport: rpc.transport, payment: 'delegate' });
+    const lc = new Lightchain({ network, apiKey: devnet.apiKey, account, fetch: http.fetch, transport: rpc.transport, payment: 'delegate' });
 
     const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
 
@@ -118,7 +119,7 @@ for (const [order, accepts] of [
 test('hands back a 402 that is not a missing payment, sending nothing', async () => {
   const http = replayHttp(spendCap as Exchange[]);
   const rpc = replayRpc([]);
-  const lc = new Lightchain({ network, account, fetch: http.fetch, transport: rpc.transport });
+  const lc = new Lightchain({ network, apiKey: devnet.apiKey, account, fetch: http.fetch, transport: rpc.transport });
 
   const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
 
@@ -137,7 +138,7 @@ for (const [what, answer, reason, depositWei] of refusals) {
   test(`does not pay a 402 that ${what}, and says why`, async () => {
     const http = replayHttp([answer]);
     const rpc = replayRpc([]);
-    const lc = new Lightchain({ network, account, fetch: http.fetch, transport: rpc.transport, depositWei });
+    const lc = new Lightchain({ network, apiKey: devnet.apiKey, account, fetch: http.fetch, transport: rpc.transport, depositWei });
 
     const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
 
@@ -151,7 +152,7 @@ for (const [what, answer, reason, depositWei] of refusals) {
 
 test('deposits into the prepaid balance alone, authorizing no delegate: what x402 pays from', async () => {
   const rpc = replayRpc(pay.rpc);
-  const lc = new Lightchain({ network, account, transport: rpc.transport });
+  const lc = new Lightchain({ network, apiKey: devnet.apiKey, account, transport: rpc.transport });
 
   const hash = await lc.deposit(minimum * 5n);
 

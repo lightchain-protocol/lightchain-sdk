@@ -1,7 +1,7 @@
 {
   "name": "@lightchain/sdk",
   "version": "0.1.0-alpha.0",
-  "description": "Keys and money for the LightChain AI Developer API: mint an API key with a wallet, fund it, read the balance, and pay a 402 by itself.",
+  "description": "The LightChain AI Developer API with an API key, through the OpenAI SDK; a wallet can top up on a 402 by itself, or pay per request with x402.",
   "license": "MIT",
   "type": "module",
   "exports": {

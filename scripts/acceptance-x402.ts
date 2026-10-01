@@ -43,8 +43,8 @@ const lc = new Lightchain({
   },
 });
 const chain = createPublicClient({ transport: http(lc.network.rpcUrl) });
-// The OpenAI SDK insists on an apiKey; keyless, lc.fetch never sends it.
-const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: 'x402', fetch: lc.fetch, maxRetries: 0 });
+// Keyless, lc.apiKey is a placeholder lc.fetch never sends.
+const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: lc.apiKey, fetch: lc.fetch, maxRetries: 0 });
 const ask = (content: string) => openai.chat.completions.create({ model, messages: [{ role: 'user', content }] });
 console.log(`wallet ${lc.address}, chain ${lc.network.chainId}, API ${lc.baseURL}, model ${model}`);
 

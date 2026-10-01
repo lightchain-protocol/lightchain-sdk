@@ -1,11 +1,8 @@
 export { jobRegistryAbi } from './abi.ts';
 export {
-  type ApiKey,
   type Balance,
-  type CreateApiKeyInput,
   type Deposit,
   Lightchain,
-  LightchainError,
   type LightchainJob,
   type LightchainOptions,
   type Payment,
