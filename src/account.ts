@@ -41,10 +41,10 @@ const EXECUTIONS = {
   ],
 } as const;
 
-const executions = (calls: Call[]) => calls.map((c) => ({ target: c.to, value: c.value, callData: c.data }));
+const toExecutions = (calls: Call[]) => calls.map((c) => ({ target: c.to, value: c.value, callData: c.data }));
 
 /** `abi.encode(Execution[])`: a batch's calls as the account decodes them. */
-export const encodeCalls = (calls: Call[]): Hex => encodeAbiParameters([EXECUTIONS], [executions(calls)]);
+export const encodeCalls = (calls: Call[]): Hex => encodeAbiParameters([EXECUTIONS], [toExecutions(calls)]);
 
 /**
  * Signs `calls` as one of `account`'s batches: EIP-712 `Batch(bytes calls,uint256 nonce,uint256 deadline)`
@@ -70,5 +70,5 @@ export async function signBatch(signer: LocalAccount, account: Address, chainId:
 /** `execute`'s data in the signed-batch mode: `abi.encode(Execution[] calls, abi.encode(nonce, deadline, signature))`. */
 export function signedExecutionData(calls: Call[], { nonce, deadline, signature }: SignedBatch): Hex {
   const opData = encodeAbiParameters([{ type: 'uint256' }, { type: 'uint256' }, { type: 'bytes' }], [nonce, deadline, signature]);
-  return encodeAbiParameters([EXECUTIONS, { type: 'bytes' }], [executions(calls), opData]);
+  return encodeAbiParameters([EXECUTIONS, { type: 'bytes' }], [toExecutions(calls), opData]);
 }

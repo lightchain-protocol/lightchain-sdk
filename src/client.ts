@@ -329,7 +329,8 @@ export class Lightchain {
    * Sends JobRegistry.depositAndAuthorize(delegate) with `value`: adds it to
    * the wallet's prepaid balance, authorizes the delegate (the API's signer)
    * to submit jobs for the wallet, and raises its allowance by `value`.
-   * Resolves with the transaction hash once it succeeded on chain.
+   * With `agentOf`, the smart account makes the call, in a batch the agent
+   * key signs. Resolves with the transaction hash once it succeeded on chain.
    */
   depositAndAuthorize(delegate: Address, value: bigint): Promise<Hex> {
     const call = { ...this.#registry, functionName: 'depositAndAuthorize', args: [delegate], value } as const;
@@ -339,8 +340,9 @@ export class Lightchain {
 
   /**
    * Sends JobRegistry.deposit() with `value`: adds it to the wallet's prepaid
-   * balance and authorizes nobody. x402 payments are paid from it. Resolves
-   * with the transaction hash once it succeeded on chain.
+   * balance and authorizes nobody. x402 payments are paid from it. With
+   * `agentOf`, the smart account makes the call, as in depositAndAuthorize.
+   * Resolves with the transaction hash once it succeeded on chain.
    */
   deposit(value: bigint): Promise<Hex> {
     const call = { ...this.#registry, functionName: 'deposit', value } as const;
@@ -374,16 +376,16 @@ export class Lightchain {
    * key signed, which it submits and pays the gas of itself.
    */
   #execute(name: string, calls: Call[]): Promise<Hex> {
-    const account = { address: this.address, abi: lightChainAccountAbi } as const;
+    const smartAccount = { address: this.address, abi: lightChainAccountAbi } as const;
     return this.#send(name, async () => {
       if (!this.#agent) {
-        return this.#walletClient.writeContract({ ...account, functionName: 'execute', args: [BATCH_MODE, encodeCalls(calls)] });
+        return this.#walletClient.writeContract({ ...smartAccount, functionName: 'execute', args: [BATCH_MODE, encodeCalls(calls)] });
       }
       // Read in the queue: the key's batch before this one has taken its nonce.
-      const nonce = await this.#publicClient.readContract({ ...account, functionName: 'batchNonce', args: [this.#account.address] });
+      const nonce = await this.#publicClient.readContract({ ...smartAccount, functionName: 'batchNonce', args: [this.#account.address] });
       const batch = await signBatch(this.#account, this.address, this.network.chainId, calls, nonce);
       const executionData = signedExecutionData(calls, batch);
-      return this.#walletClient.writeContract({ ...account, functionName: 'execute', args: [SIGNED_BATCH_MODE, executionData] });
+      return this.#walletClient.writeContract({ ...smartAccount, functionName: 'execute', args: [SIGNED_BATCH_MODE, executionData] });
     });
   }
 
@@ -519,8 +521,13 @@ export class Lightchain {
    * depositAndAuthorize of the API's delegate with `depositWei` of the
    * account's own LCAI, and the sponsor sends both as one transaction.
    * `apiKey` is a `chat` key of this wallet (createApiKey). Resolves with the
-   * transaction hash once the account runs the account code. The sponsor pays
-   * for one setup per account; a refusal throws a LightchainError with its code.
+   * transaction hash once the account runs the account code, also after a
+   * `202` (pending) or a `502` `send_unconfirmed`. The sponsor pays for one
+   * setup per account; a refusal throws a LightchainError with its code.
+   *
+   * The batch carries no session request, which the sponsor would also pay
+   * for: the Developer API opens its own sessions through the delegate, so a
+   * session the account requested would be claimed and left to expire.
    */
   async setupAccount({ apiKey, depositWei }: { apiKey: string; depositWei: bigint }): Promise<Hex> {
     const implementation = this.network.accountImplementation;
@@ -533,13 +540,23 @@ export class Lightchain {
     const calls = [{ to: this.network.jobRegistry, value: depositWei, data }];
     const { address, chainId, nonce, r, s, yParity } = await this.#walletClient.signAuthorization({ contractAddress: implementation });
     // ponytail: batch nonce 0, a fresh key's first batch. An account that
-    // adopted the code and ran batches before is refused in simulation.
-    const batch = await signBatch(this.#account, this.address, chainId, calls, 0n);
-    const { tx_hash: hash } = await this.#api<{ tx_hash: Hex }>('/v1/account/setup', {
+    // adopted the code and ran batches before is refused in simulation; read
+    // its batchNonce when the address has code, if such accounts show up.
+    const batch = await signBatch(this.#account, this.address, this.network.chainId, calls, 0n);
+    const hash = await this.#api<{ tx_hash: Hex }>('/v1/account/setup', {
       method: 'POST',
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify({ authorization: { address, chainId, nonce, r, s, yParity }, calls, ...batch }, bigintsAsStrings),
-    });
+    }).then(
+      (answer) => answer.tx_hash,
+      (error: unknown) => {
+        // Sent, and the node did not confirm it took it: the setup is spent, so it is waited for.
+        const sent = error instanceof LightchainError && error.code === 'send_unconfirmed';
+        const txHash = sent ? (error.body as { error?: { tx_hash?: Hex } }).error?.tx_hash : undefined;
+        if (!txHash) throw error;
+        return txHash;
+      },
+    );
     // Also when the sponsor answered before the transaction was mined (202, pending).
     const receipt = await this.#publicClient.waitForTransactionReceipt({ hash });
     const code = await this.#publicClient.getCode({ address: this.address });

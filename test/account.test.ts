@@ -47,30 +47,40 @@ const BATCH_TYPES = {
   ],
 } as const;
 
+type Execution = { target: Address; value: bigint; callData: Hex };
+/** Who signed a batch of the owner's account. */
+const batchSigner = (calls: readonly Execution[], nonce: bigint, deadline: bigint, signature: Hex) =>
+  recoverTypedDataAddress({
+    domain: { name: 'LightChainAccount', version: '1', chainId: 48221, verifyingContract: owner.address },
+    types: BATCH_TYPES,
+    primaryType: 'Batch',
+    message: { calls: encodeAbiParameters([EXECUTIONS], [calls]), nonce, deadline },
+    signature,
+  });
+
 const [challenge, signedIn] = mint as Exchange[];
+const minedReceipt = pay.rpc.at(-1)!.result as Record<string, unknown>;
 const balance: Exchange = { method: 'GET', path: '/api/balance', status: 200, body: { balance: '0', delegate: DELEGATE, delegateAuthorized: false } };
 const setupAnswer = (status: number, body: object): Exchange => ({ method: 'POST', path: '/v1/account/setup', status, body });
 const confirmed = setupAnswer(200, { account: owner.address, tx_hash: SETUP_TX, status: 'confirmed' });
 
 /** The chain around a setup: the account's next nonce, then the setup mined and its code. */
 function setupChain({ status = '0x1', code = DESIGNATOR } = {}): RpcCall[] {
-  const receipt = pay.rpc.at(-1)!.result as Record<string, unknown>;
   return [
     { method: 'eth_getTransactionCount', result: '0x3' },
     { method: 'eth_blockNumber', result: '0xe0' },
-    { method: 'eth_getTransactionReceipt', result: { ...receipt, transactionHash: SETUP_TX, to: owner.address.toLowerCase(), type: '0x4', logs: [], status } },
+    { method: 'eth_getTransactionReceipt', result: { ...minedReceipt, transactionHash: SETUP_TX, to: owner.address.toLowerCase(), type: '0x4', logs: [], status } },
     { method: 'eth_getCode', result: code },
   ];
 }
 
 /** The chain around transactions the SDK sends: filled, broadcast and mined. */
 function sendChain(extra: RpcCall[] = []): RpcCall[] {
-  const receipt = pay.rpc.at(-1)!.result as Record<string, unknown>;
   return [
     { method: 'eth_fillTransaction', result: pay.rpc[0].result },
     { method: 'eth_sendRawTransaction', result: TX },
     { method: 'eth_blockNumber', result: '0xe0' },
-    { method: 'eth_getTransactionReceipt', result: { ...receipt, transactionHash: TX, logs: [] } },
+    { method: 'eth_getTransactionReceipt', result: { ...minedReceipt, transactionHash: TX, logs: [] } },
     ...extra,
   ];
 }
@@ -120,18 +130,8 @@ test('sets up a smart account: signs the 7702 authorization and the deposit-and-
   assert.equal(body.nonce, '0');
   const deadline = Number(body.deadline) - Date.now() / 1000;
   assert.ok(deadline > 60 && deadline <= 600, `deadline ${deadline} s away`);
-  const signer = await recoverTypedDataAddress({
-    domain: { name: 'LightChainAccount', version: '1', chainId: 48221, verifyingContract: owner.address },
-    types: BATCH_TYPES,
-    primaryType: 'Batch',
-    message: {
-      calls: encodeAbiParameters([EXECUTIONS], [body.calls.map((c) => ({ target: c.to, value: BigInt(c.value), callData: c.data }))]),
-      nonce: 0n,
-      deadline: BigInt(body.deadline),
-    },
-    signature: body.signature,
-  });
-  assert.equal(signer, owner.address);
+  const calls = body.calls.map((c) => ({ target: c.to, value: BigInt(c.value), callData: c.data }));
+  assert.equal(await batchSigner(calls, 0n, BigInt(body.deadline), body.signature), owner.address);
   http.done();
 });
 
@@ -173,6 +173,19 @@ test('waits for a setup the sponsor answered as pending, and throws when it did 
     await assert.rejects(lc.setupAccount({ apiKey: devnet.apiKey, depositWei: 5000n }), /did not make .* a smart account/, outcome);
     assert.ok(rpc.sent.some((c) => c.method === 'eth_getTransactionReceipt'), `${outcome}: waited for the receipt`);
   }
+});
+
+test('waits for a setup the sponsor sent without the node confirming it took it: it is spent either way', async () => {
+  // As consumer-api answers a broadcast that went unanswered.
+  const unconfirmed = setupAnswer(502, {
+    error: { message: `The setup was sent as ${SETUP_TX}, and the node did not confirm it took it.`, type: 'server_error', param: null, code: 'send_unconfirmed', tx_hash: SETUP_TX },
+  });
+  const http = replayHttp([challenge, signedIn, balance, unconfirmed]);
+  const rpc = replayRpc(setupChain());
+  const lc = new Lightchain({ network, account: owner, fetch: http.fetch, transport: rpc.transport });
+
+  assert.equal(await lc.setupAccount({ apiKey: devnet.apiKey, depositWei: 5000n }), SETUP_TX);
+  assert.ok(rpc.sent.some((c) => c.method === 'eth_getTransactionReceipt'));
 });
 
 test('refuses to set up on a network that names no account code, before signing anything', async () => {
@@ -255,14 +268,7 @@ test('a client with an agent key pays a 402 for its smart account with a batch t
   assert.deepEqual(calls, [{ target: network.jobRegistry, value: minimum, callData: DEPOSIT_AND_AUTHORIZE }]);
   const [nonce, deadline, signature] = decodeAbiParameters([{ type: 'uint256' }, { type: 'uint256' }, { type: 'bytes' }], opData);
   assert.equal(nonce, 5n);
-  const signer = await recoverTypedDataAddress({
-    domain: { name: 'LightChainAccount', version: '1', chainId: 48221, verifyingContract: owner.address },
-    types: BATCH_TYPES,
-    primaryType: 'Batch',
-    message: { calls: encodeAbiParameters([EXECUTIONS], [calls]), nonce, deadline },
-    signature,
-  });
-  assert.equal(signer, agent.address);
+  assert.equal(await batchSigner(calls, nonce, deadline, signature), agent.address);
   http.done();
 });
 
