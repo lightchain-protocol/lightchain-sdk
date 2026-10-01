@@ -8,8 +8,6 @@ export type Network = {
   rpcUrl: string;
   /** The JobRegistry proxy: prepaid balances and delegate authorizations live there. */
   jobRegistry: Address;
-  /** The LightChainAccount code a smart account adopts: the only code the sponsor pays a setup for. */
-  accountImplementation?: Address;
 };
 
 export const networks = {
