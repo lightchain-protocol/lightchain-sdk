@@ -50,6 +50,7 @@ type DelegatePayment = {
   onDeposit?: (deposit: Deposit) => void;
   maxPaymentWei?: never;
   onPayment?: never;
+  keyless?: never;
 };
 
 /**
@@ -62,6 +63,12 @@ type X402Payment = {
   maxPaymentWei: bigint;
   /** Told of every x402 payment the server settled. */
   onPayment?: (payment: Payment) => void;
+  /**
+   * Call with no API key: `fetch` drops the Authorization header the OpenAI
+   * SDK sends (it insists on some apiKey string), so the payment alone pays,
+   * and the API holds the account, as payer, to its per-payer limits.
+   */
+  keyless?: boolean;
   depositWei?: never;
   onDeposit?: never;
 };
@@ -217,6 +224,7 @@ export class Lightchain {
   readonly #onDeposit: ((deposit: Deposit) => void) | undefined;
   readonly #maxPaymentWei: bigint = 0n;
   readonly #onPayment: ((payment: Payment) => void) | undefined;
+  readonly #keyless: boolean = false;
   /** The last transaction sent: the next one waits for it. */
   #lastSent: Promise<unknown> = Promise.resolve();
 
@@ -242,8 +250,11 @@ export class Lightchain {
       }
       this.#maxPaymentWei = options.maxPaymentWei;
       this.#onPayment = options.onPayment;
+      this.#keyless = options.keyless === true;
     } else if (options.payment === undefined || options.payment === 'delegate') {
-      if (given(['maxPaymentWei', 'onPayment']).length) throw new Error('maxPaymentWei and onPayment belong to payment "x402".');
+      if (given(['maxPaymentWei', 'onPayment', 'keyless']).length) {
+        throw new Error('maxPaymentWei, onPayment and keyless belong to payment "x402".');
+      }
       this.#depositWei = options.depositWei;
       this.#onDeposit = options.onDeposit;
     } else {
@@ -277,6 +288,8 @@ export class Lightchain {
    * sends the request again with it in a PAYMENT-SIGNATURE header. It never
    * sends a transaction.
    *
+   * With `keyless`, no request carries an Authorization header.
+   *
    * Every other answer comes back as it is, a 402 for a limit the key's owner
    * set included. A 402 it does not pay comes back with the reason prepended
    * to `error.message`.
@@ -287,6 +300,12 @@ export class Lightchain {
    * prepaid balance.
    */
   fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    if (this.#keyless) {
+      // init's headers replace a Request's own, so this drops the key either way.
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      headers.delete('authorization');
+      init = { ...init, headers };
+    }
     const again = input instanceof Request ? input.clone() : input;
     const response = await this.#fetch(input, init);
     if (response.status !== 402) return response;
