@@ -51,12 +51,6 @@
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 4
-                  },
-                  "dailySpendCapWei": {
-                    "description": "Spend cap per UTC day, in wei.",
-                    "nullable": true,
-                    "type": "string",
-                    "pattern": "^[1-9][0-9]{0,77}$"
                   }
                 }
               }
@@ -125,8 +119,7 @@
                       "description": "The limits enforced: the key's own where its owner set them, the server's ceilings elsewhere.",
                       "required": [
                         "requestsPerMinute",
-                        "concurrentSessions",
-                        "dailySpendCapWei"
+                        "concurrentSessions"
                       ],
                       "properties": {
                         "requestsPerMinute": {
@@ -135,12 +128,6 @@
                         "concurrentSessions": {
                           "type": "integer",
                           "description": "Completions in flight at once."
-                        },
-                        "dailySpendCapWei": {
-                          "type": "string",
-                          "pattern": "^[0-9]+$",
-                          "description": "Per UTC day; null is uncapped.",
-                          "nullable": true
                         }
                       }
                     },
@@ -150,7 +137,6 @@
                       "required": [
                         "rate",
                         "concurrency",
-                        "dailySpend",
                         "spendCap",
                         "sessionOpens"
                       ],
@@ -159,9 +145,6 @@
                           "type": "integer"
                         },
                         "concurrency": {
-                          "type": "integer"
-                        },
-                        "dailySpend": {
                           "type": "integer"
                         },
                         "spendCap": {
@@ -377,8 +360,7 @@
                             "description": "The limits enforced: the key's own where its owner set them, the server's ceilings elsewhere.",
                             "required": [
                               "requestsPerMinute",
-                              "concurrentSessions",
-                              "dailySpendCapWei"
+                              "concurrentSessions"
                             ],
                             "properties": {
                               "requestsPerMinute": {
@@ -387,12 +369,6 @@
                               "concurrentSessions": {
                                 "type": "integer",
                                 "description": "Completions in flight at once."
-                              },
-                              "dailySpendCapWei": {
-                                "type": "string",
-                                "pattern": "^[0-9]+$",
-                                "description": "Per UTC day; null is uncapped.",
-                                "nullable": true
                               }
                             }
                           },
@@ -402,7 +378,6 @@
                             "required": [
                               "rate",
                               "concurrency",
-                              "dailySpend",
                               "spendCap",
                               "sessionOpens"
                             ],
@@ -411,9 +386,6 @@
                                 "type": "integer"
                               },
                               "concurrency": {
-                                "type": "integer"
-                              },
-                              "dailySpend": {
                                 "type": "integer"
                               },
                               "spendCap": {
@@ -959,19 +931,11 @@
             }
           },
           "402": {
-            "description": "The call cannot be paid. Codes: delegate_not_authorized, insufficient_balance, allowance_exhausted (with `accepts`); spend_cap_exceeded (with `spend_cap_wei`); daily_spend_cap_exceeded (with `daily_spend_cap_wei` and `retry-after`).",
-            "headers": {
-              "retry-after": {
-                "schema": {
-                  "type": "integer"
-                },
-                "description": "Seconds until the same call may pass."
-              }
-            },
+            "description": "The call cannot be paid. Codes: delegate_not_authorized, insufficient_balance, allowance_exhausted (with `accepts`); spend_cap_exceeded (with `spend_cap_wei`).",
             "content": {
               "application/json": {
                 "schema": {
-                  "description": "The call cannot be paid. Codes: delegate_not_authorized, insufficient_balance, allowance_exhausted (with `accepts`); spend_cap_exceeded (with `spend_cap_wei`); daily_spend_cap_exceeded (with `daily_spend_cap_wei` and `retry-after`).",
+                  "description": "The call cannot be paid. Codes: delegate_not_authorized, insufficient_balance, allowance_exhausted (with `accepts`); spend_cap_exceeded (with `spend_cap_wei`).",
                   "type": "object",
                   "required": [
                     "error"
@@ -1076,11 +1040,6 @@
                           "type": "string",
                           "pattern": "^[0-9]+$",
                           "description": "The key's lifetime spend cap."
-                        },
-                        "daily_spend_cap_wei": {
-                          "type": "string",
-                          "pattern": "^[0-9]+$",
-                          "description": "The key's spend cap per UTC day."
                         }
                       }
                     }

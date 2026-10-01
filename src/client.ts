@@ -91,7 +91,6 @@ export type CreateApiKeyInput = {
   spendCapWei?: bigint;
   requestsPerMinute?: number;
   concurrentSessions?: number;
-  dailySpendCapWei?: bigint;
 };
 
 /** A key as the API lists it: never the key itself. Wei amounts are decimal strings. */
@@ -102,7 +101,7 @@ export type ApiKey = {
   scope: 'chat' | 'read';
   spendCapWei: string | null;
   spentWei: string;
-  limits: { requestsPerMinute: number; concurrentSessions: number; dailySpendCapWei: string | null };
+  limits: { requestsPerMinute: number; concurrentSessions: number };
   limitHits: Record<string, number>;
   createdAt: string;
   revokedAt: string | null;

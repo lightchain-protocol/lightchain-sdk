@@ -39,13 +39,11 @@
       "spentWei": "0",
       "limits": {
         "requestsPerMinute": 60,
-        "concurrentSessions": 4,
-        "dailySpendCapWei": null
+        "concurrentSessions": 4
       },
       "limitHits": {
         "rate": 0,
         "concurrency": 0,
-        "dailySpend": 0,
         "spendCap": 0,
         "sessionOpens": 0
       },

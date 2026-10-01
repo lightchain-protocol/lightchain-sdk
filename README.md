@@ -58,7 +58,7 @@ console.log(await lc.getBalance()); // { balance: 999...n }
 | Member | Does |
 | --- | --- |
 | `new Lightchain({ network, account, payment?, depositWei?, onDeposit?, maxPaymentWei?, onPayment?, keyless?, agentOf?, fetch?, transport? })` | `network` is `"mainnet"`, `"testnet"`, or your own `Network` (a devnet). `account` is a viem local account. `payment` is `"delegate"` (the default: `depositWei`, `onDeposit`) or `"x402"` (`maxPaymentWei`, required, `onPayment` and `keyless`). `agentOf` makes `account` an agent key of that smart account ([agents](#owner-and-agent-keys)). |
-| `createApiKey(input?)` | Signs in and mints a key bound to the wallet. `input`: `name`, `scope` (`chat` or `read`), `spendCapWei`, `requestsPerMinute`, `concurrentSessions`, `dailySpendCapWei`. The answer's `key` is shown this once. |
+| `createApiKey(input?)` | Signs in and mints a key bound to the wallet. `input`: `name`, `scope` (`chat` or `read`), `spendCapWei`, `requestsPerMinute`, `concurrentSessions`. The answer's `key` is shown this once. |
 | `signIn()` | The Sign-In with Ethereum token (one hour), for the other key routes (`GET`/`PATCH`/`DELETE /api/api-keys`). |
 | `fetch` | `fetch` that pays a `402` the way `payment` says and sends the request again, once. Give it to the OpenAI SDK. |
 | `depositAndAuthorize(delegate, value)` | Sends the transaction yourself: adds `value` to the balance, authorizes `delegate` (the API's signer) and raises its allowance by `value`. Resolves with the transaction hash once it succeeded. |
@@ -72,7 +72,7 @@ console.log(await lc.getBalance()); // { balance: 999...n }
 
 This is the default mode, `payment: "delegate"`. While the wallet has not paid, a completion answers `402` with the transaction to send in `error.accepts` (codes `delegate_not_authorized`, `insufficient_balance`, `allowance_exhausted`). `lc.fetch` sends that `depositAndAuthorize` with `depositWei`, or with the 402's minimum (one job's fee) when `depositWei` is not set, then sends the request again. `onDeposit` is told of every deposit it makes.
 
-Before sending anything it checks the 402 against the network it was given: the chain id, the wallet (the key must be this wallet's), and the contract (this network's JobRegistry). A 402 that fails a check, or asks for more than `depositWei`, is not paid: it comes back as a 402 with the reason at the start of `error.message`. A 402 for a limit you set (`spend_cap_exceeded`, `daily_spend_cap_exceeded`) comes back as it is. This mode never signs an x402 payment: it leaves the `prepaid-debit` entry in `accepts` alone.
+Before sending anything it checks the 402 against the network it was given: the chain id, the wallet (the key must be this wallet's), and the contract (this network's JobRegistry). A 402 that fails a check, or asks for more than `depositWei`, is not paid: it comes back as a 402 with the reason at the start of `error.message`. A 402 for the limit you set (`spend_cap_exceeded`) comes back as it is. This mode never signs an x402 payment: it leaves the `prepaid-debit` entry in `accepts` alone.
 
 The delegate and the fee come from the API: the SDK trusts the API it talks to for those, as it trusts it with your key. Set `depositWei` to bound what one 402 can make it send.
 
