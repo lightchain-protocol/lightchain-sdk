@@ -231,3 +231,48 @@ test('carries the payment on a Request sent again, keeping its own headers', asy
   assert.equal(paymentOf(http.sent[1]).accepted.asset, testnetRequirements.asset);
   assert.deepEqual(http.sent[1].body, http.sent[0].body);
 });
+
+/** The Developer API's 402 to a call with no API key: the x402 requirements alone. */
+function keylessPaymentRequired(requirements: object): Exchange {
+  const { error } = delegateRequired.body as { error: object };
+  return { ...delegateRequired, body: { error: { ...error, code: 'payment_required', accepts: [requirements] } } };
+}
+
+test('with keyless, sends no Authorization header, on the call or on its paid retry', async () => {
+  const http = replayHttp([keylessPaymentRequired(testnetRequirements), completed]);
+  const lc = new Lightchain({ network: 'testnet', ...x402(http.fetch), keyless: true });
+
+  // As the OpenAI SDK sends it: with the placeholder key it insists on.
+  const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(http.sent.map((s) => s.headers.get('authorization')), [null, null]);
+  assert.equal(http.sent[0].headers.get('content-type'), 'application/json', 'the other headers go out as given');
+  assert.equal(paymentOf(http.sent[1]).accepted.asset, testnetRequirements.asset);
+  http.done();
+});
+
+test('with keyless, sends no Authorization header from a Request either', async () => {
+  const http = replayHttp([keylessPaymentRequired(testnetRequirements), completed]);
+  const lc = new Lightchain({ network: 'testnet', ...x402(http.fetch), keyless: true });
+
+  const response = await lc.fetch(new Request(`${lc.baseURL}/chat/completions`, request));
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(http.sent.map((s) => s.headers.get('authorization')), [null, null]);
+  assert.deepEqual(http.sent[1].body, http.sent[0].body);
+});
+
+test('without keyless, the API key goes out on the call and on its paid retry', async () => {
+  const http = replayHttp([paymentRequired(testnetRequirements), completed]);
+  const lc = new Lightchain({ network: 'testnet', ...x402(http.fetch) });
+
+  await lc.fetch(`${lc.baseURL}/chat/completions`, request);
+
+  assert.deepEqual(http.sent.map((s) => s.headers.get('authorization')), ['Bearer lcai_test', 'Bearer lcai_test']);
+});
+
+test('refuses keyless outside x402 mode: the delegate way needs the key', () => {
+  const base = { network: 'testnet', account: privateKeyToAccount(payerKey) } as const;
+  assert.throws(() => new Lightchain({ ...base, keyless: true } as unknown as LightchainOptions), /payment "x402"/);
+});

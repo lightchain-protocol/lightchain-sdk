@@ -57,7 +57,7 @@ console.log(await lc.getBalance()); // { balance: 999...n }
 
 | Member | Does |
 | --- | --- |
-| `new Lightchain({ network, account, payment?, depositWei?, onDeposit?, maxPaymentWei?, onPayment?, fetch?, transport? })` | `network` is `"mainnet"`, `"testnet"`, or your own `Network` (a devnet). `account` is a viem local account. `payment` is `"delegate"` (the default: `depositWei`, `onDeposit`) or `"x402"` (`maxPaymentWei`, required, and `onPayment`). |
+| `new Lightchain({ network, account, payment?, depositWei?, onDeposit?, maxPaymentWei?, onPayment?, keyless?, fetch?, transport? })` | `network` is `"mainnet"`, `"testnet"`, or your own `Network` (a devnet). `account` is a viem local account. `payment` is `"delegate"` (the default: `depositWei`, `onDeposit`) or `"x402"` (`maxPaymentWei`, required, `onPayment` and `keyless`). |
 | `createApiKey(input?)` | Signs in and mints a key bound to the wallet. `input`: `name`, `scope` (`chat` or `read`), `spendCapWei`, `requestsPerMinute`, `concurrentSessions`, `dailySpendCapWei`. The answer's `key` is shown this once. |
 | `signIn()` | The Sign-In with Ethereum token (one hour), for the other key routes (`GET`/`PATCH`/`DELETE /api/api-keys`). |
 | `fetch` | `fetch` that pays a `402` the way `payment` says and sends the request again, once. Give it to the OpenAI SDK. |
@@ -110,9 +110,19 @@ On a `402` whose `accepts` lists the `prepaid-debit` requirements, `lc.fetch` si
 Before signing, the SDK checks the requirements against the network it was given: `network` is `eip155:<chainId>`, `asset` is the network's JobRegistry, the signing domain is `LightChain JobRegistry` version `1`, `payTo` and `facilitatorAddress` are addresses, `maxTimeoutSeconds` is between 1 and 600, and `amount` is at most `maxPaymentWei`. Requirements that fail a check are not signed: the 402 comes back with the reason at the start of `error.message`. So does a 402 that offers only the delegate way (an API that takes no x402 payments).
 
 - **The modes do not mix.** x402 mode never sends `depositAndAuthorize`, and delegate mode never signs an x402 payment.
-- **A wallet with a delegate gets no 402.** Its calls are served through the delegate, in either mode; x402 mode pays only the calls the API asks it to pay.
-- **The API key still goes with every call.** It authenticates the call and holds it to the key's limits. The payer is the account, usually the wallet that minted the key.
+- **A wallet with a delegate gets no 402 on its key.** Its calls are served through the delegate, in either mode; x402 mode pays only the calls the API asks it to pay. A `keyless` call names no wallet, so it is always asked to pay.
+- **The API key goes with every call, unless `keyless`.** It authenticates the call and holds it to the key's limits. The payer is the account, usually the wallet that minted the key.
 - **A refused payment comes back as the API answered it** (for example `402` `insufficient_funds`, or `invalid_prepaid_debit_payload_expired`), with the x402 reason as `error.code`. The SDK does not pay it again. The Developer API's Payment page lists the codes and what to do about each.
+
+#### With no API key
+
+Add `keyless: true` and skip the key: no sign-in, nothing minted. `lc.fetch` then drops the `Authorization` header, so the OpenAI SDK's `apiKey` can be any string (it insists on one). The API answers the call `402` with the x402 requirements alone, the SDK pays it, and the account is held, as payer, to the API's per-payer limits instead of a key's: by default 30 requests a minute, one call in flight, and 1 LCAI a day.
+
+```ts
+const lc = new Lightchain({ network: "testnet", account, payment: "x402", maxPaymentWei: 10n ** 16n, keyless: true });
+await lc.deposit(10n ** 18n); // once
+const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: "x402", fetch: lc.fetch });
+```
 
 ## Networks
 
@@ -134,7 +144,7 @@ npm run typecheck
 npm run build       # dist/
 npm run abi         # regenerate src/abi.ts from ../pkg/chain/abis (after `make bindings`)
 WALLET_PRIVATE_KEY=0x... npm run acceptance   # end to end on testnet; see scripts/acceptance.ts
-WALLET_PRIVATE_KEY=0x... npm run acceptance:x402   # x402 mode, then delegate mode; see scripts/acceptance-x402.ts
+WALLET_PRIVATE_KEY=0x... LIGHTCHAIN_MODEL=gemma4:e2b npm run acceptance:x402   # keyless x402 mode; see scripts/acceptance-x402.ts
 ```
 
 The fixtures in `test/fixtures` were recorded from a local devnet (`make devnet-full`, chain 48221) with Foundry's publicly known test account 7. The x402 tests sign the scheme's published test vectors (`../scripts/x402-vectors/vectors.json`) byte for byte, with Foundry's test account 3. Never use either key on a real network.
