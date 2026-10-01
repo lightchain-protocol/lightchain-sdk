@@ -6,7 +6,7 @@
     "body": {
       "error": {
         "param": null,
-        "message": "This key has reached its spend cap of 1 wei. Mint a key with a higher cap to continue.",
+        "message": "This key has reached its spend cap of 1 wei. Raise or remove the cap in the chat (Developer, API keys) to continue.",
         "type": "insufficient_quota",
         "code": "spend_cap_exceeded",
         "spend_cap_wei": "1"
