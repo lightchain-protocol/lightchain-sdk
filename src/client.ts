@@ -26,9 +26,6 @@ export type LightchainOptions = {
   transport?: Transport;
 } & (DelegatePayment | X402Payment);
 
-/** The API key (`lcai_...`), created in the chat under Developer, API keys. `fetch` sends it with every call. */
-type ApiKey = string;
-
 /**
  * The default. With an account, `fetch` pays a 402 by authorizing the API's
  * delegate, with a depositAndAuthorize transaction; without one, the 402
@@ -36,7 +33,8 @@ type ApiKey = string;
  */
 type DelegatePayment = {
   payment?: 'delegate';
-  apiKey: ApiKey;
+  /** The API key (`lcai_...`), created in the chat under Developer, API keys. `fetch` sends it with every call. */
+  apiKey: string;
   /** A viem local account: the wallet behind the key, which pays a 402 by itself. */
   account?: LocalAccount;
   /**
@@ -67,7 +65,7 @@ type X402Payment = {
   depositWei?: never;
   onDeposit?: never;
 } & (
-  | { apiKey: ApiKey; keyless?: false }
+  | { apiKey: string; keyless?: false }
   | {
       /**
        * Call with no API key: `fetch` drops the Authorization header, so the
@@ -166,8 +164,7 @@ export class Lightchain {
   readonly address: Address | undefined;
   /** The OpenAI-compatible base URL, for the OpenAI SDK's `baseURL`. */
   readonly baseURL: string;
-  /** The API key, for the OpenAI SDK's `apiKey`; keyless, a placeholder that `fetch` never sends. */
-  readonly apiKey: string;
+  readonly #apiKey: string;
   readonly #account: LocalAccount | undefined;
   readonly #fetch: typeof fetch;
   readonly #publicClient: PublicClient;
@@ -192,9 +189,9 @@ export class Lightchain {
     const fetch = options.fetch ?? globalThis.fetch;
     this.#fetch = (input, init) => fetch(input, init);
     this.#registry = { address: this.network.jobRegistry, abi: jobRegistryAbi };
-    // Who needs what: every mode takes apiKey, but x402 with keyless; x402
-    // needs account, to sign; the delegate mode takes one to pay its 402s.
-    // An option that would be silently ignored is refused.
+    // Who needs what (the README's table): the default mode needs apiKey, and
+    // pays its 402s only with an account. x402 needs account, to sign, and
+    // apiKey or keyless. An option that would be silently ignored is refused.
     const given = (names: string[]) => names.filter((n) => (options as Record<string, unknown>)[n] !== undefined);
     if (options.payment === 'x402') {
       if (given(['depositWei', 'onDeposit']).length) throw new Error('depositWei and onDeposit belong to payment "delegate".');
@@ -224,7 +221,7 @@ export class Lightchain {
       throw new Error('needs apiKey: a key created in the chat, under Developer, API keys.');
     }
     // The OpenAI SDK insists on some apiKey.
-    this.apiKey = options.apiKey ?? 'keyless';
+    this.#apiKey = options.apiKey ?? 'keyless';
     const chain = defineChain({
       id: this.network.chainId,
       name: `LightChain ${this.network.chainId}`,
@@ -238,9 +235,17 @@ export class Lightchain {
   }
 
   /**
-   * fetch, sending the API key as `Authorization: Bearer` and, given an
-   * account, paying a 402 by itself, the way `payment` says. Give it to the
-   * OpenAI SDK as `fetch`.
+   * The API key, for the OpenAI SDK's `apiKey`; keyless, a placeholder that
+   * `fetch` never sends. A getter, so that logging the client prints no key.
+   */
+  get apiKey(): string {
+    return this.#apiKey;
+  }
+
+  /**
+   * fetch, sending the API key as `Authorization: Bearer` to the network's
+   * API and, given an account, paying a 402 by itself, the way `payment`
+   * says. Give it to the OpenAI SDK as `fetch`.
    *
    * `delegate` (the default): when the Developer API answers that the wallet
    * behind the key has not paid (a `delegate` entry in the 402's `accepts`), it
@@ -269,7 +274,10 @@ export class Lightchain {
     // init's headers replace a Request's own, so this sets the key, or drops it, either way.
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     if (this.#keyless) headers.delete('authorization');
-    else headers.set('authorization', `Bearer ${this.apiKey}`);
+    // The key goes to the network's API, never to another host this fetch is pointed at.
+    else if (new URL(input instanceof Request ? input.url : input).origin === new URL(this.baseURL).origin) {
+      headers.set('authorization', `Bearer ${this.#apiKey}`);
+    }
     init = { ...init, headers };
     const again = input instanceof Request ? input.clone() : input;
     const response = await this.#fetch(input, init);
@@ -288,7 +296,7 @@ export class Lightchain {
       if (!accept) throw new Error('payment is "x402", and the 402 offers no prepaid-debit payment.');
       if (x402) payment = await this.#signPayment(account, accept as X402Accept);
       else {
-        const deposit = this.#checkDelegateOffer(account.address, accept as DelegateAccept);
+        const deposit = this.#checkDelegateOffer(account, accept as DelegateAccept);
         const hash = await this.depositAndAuthorize(deposit.delegate, deposit.value);
         this.#onDeposit?.({ hash, ...deposit });
       }
@@ -302,8 +310,9 @@ export class Lightchain {
     // ponytail: sent again once. A 402 on that retry (the fee rose meanwhile)
     // comes back to the caller; loop, with a bound, if that shows up.
     if (!x402) return this.#fetch(again, init);
-    headers.set('payment-signature', payment);
-    const paid = await this.#fetch(again, init);
+    const paidHeaders = new Headers(headers);
+    paidHeaders.set('payment-signature', payment);
+    const paid = await this.#fetch(again, { ...init, headers: paidHeaders });
     const settled = settlementOf(paid);
     if (settled) this.#onPayment?.(settled);
     return paid;
@@ -361,11 +370,11 @@ export class Lightchain {
     return { balance, authorized, allowance };
   }
 
-  /** The deposit a 402's delegate offer asks for, once it names this network's JobRegistry and the wallet `payer`. */
-  #checkDelegateOffer(wallet: Address, accept: DelegateAccept): { delegate: Address; value: bigint } {
+  /** The deposit a 402's delegate offer asks for, once it names this network's JobRegistry and the account as payer. */
+  #checkDelegateOffer(account: LocalAccount, accept: DelegateAccept): { delegate: Address; value: bigint } {
     const { chain_id, payer, delegate, instruction } = accept;
     if (chain_id !== this.network.chainId) throw new Error(`the 402 is for chain ${chain_id}, not ${this.network.chainId}.`);
-    if (!sameAddress(payer, wallet)) throw new Error(`the key belongs to another wallet (${payer}), not ${wallet}.`);
+    if (!sameAddress(payer, account.address)) throw new Error(`the key belongs to another wallet (${payer}), not ${account.address}.`);
     if (!sameAddress(instruction?.contract, this.network.jobRegistry)) {
       throw new Error(`the 402 names ${instruction?.contract}, not this network's JobRegistry ${this.network.jobRegistry}.`);
     }

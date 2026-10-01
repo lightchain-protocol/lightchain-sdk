@@ -67,3 +67,24 @@ test('sends no transaction and reads no balance without an account', async () =>
   await assert.rejects(lc.getBalance(), /getBalance needs account/);
   assert.deepEqual(rpc.sent, []);
 });
+
+test("sends the key to the network's API only", async () => {
+  const sent: (string | null)[] = [];
+  const fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    sent.push(new Request(input, init).headers.get('authorization'));
+    return new Response('{}');
+  };
+  const lc = new Lightchain({ network, apiKey: devnet.apiKey, fetch });
+
+  await lc.fetch('http://localhost:8091/v1/models');
+  await lc.fetch('https://example.com/v1/models', { headers: { authorization: 'Bearer theirs' } });
+  await lc.fetch(`${lc.baseURL}/models`);
+
+  assert.deepEqual(sent, [null, 'Bearer theirs', `Bearer ${devnet.apiKey}`]);
+});
+
+test('keeps the key out of what a logged client prints', () => {
+  const lc = new Lightchain({ network, apiKey: devnet.apiKey });
+  assert.equal(lc.apiKey, devnet.apiKey);
+  assert.doesNotMatch(JSON.stringify(lc), /lcai_/);
+});

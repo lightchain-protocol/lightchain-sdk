@@ -103,7 +103,7 @@ The constructor throws on any other combination, and on an option the mode would
 | Member | Does |
 | --- | --- |
 | `new Lightchain({ network, apiKey, account?, payment?, ..., fetch?, transport? })` | `network` is `"mainnet"`, `"testnet"`, or your own `Network` (a devnet). The other options are in the table above. |
-| `fetch` | `fetch` that sends `Authorization: Bearer <apiKey>` and, given an `account`, pays a `402` the way `payment` says and sends the request again, once. Give it to the OpenAI SDK. |
+| `fetch` | `fetch` that sends `Authorization: Bearer <apiKey>` to the network's API (and to no other host) and, given an `account`, pays a `402` the way `payment` says and sends the request again, once. Give it to the OpenAI SDK. |
 | `baseURL`, `apiKey` | The OpenAI SDK's `baseURL` (the network's `/v1`) and `apiKey`. |
 | `getBalance(delegate?)` | The account's prepaid balance; with `delegate`, also whether it is authorized and its remaining allowance. Needs `account`. |
 | `deposit(value)` | Adds `value` to the account's prepaid balance and authorizes nobody: what x402 pays from. Needs `account`. |

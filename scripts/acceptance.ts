@@ -13,8 +13,9 @@
 // Optional: LIGHTCHAIN_MODEL (default: the first listed), LIGHTCHAIN_DEPOSIT_WEI.
 import assert from 'node:assert/strict';
 import OpenAI from 'openai';
-import type { Address, Hex, LocalAccount } from 'viem';
+import { type Address, type Hex, isAddressEqual, type LocalAccount } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { parseSiweMessage } from 'viem/siwe';
 import { type Deposit, Lightchain, type LightchainJob, networks } from '../src/index.ts';
 
 const env = process.env;
@@ -38,6 +39,9 @@ async function mintApiKey(apiUrl: string, wallet: LocalAccount, name: string): P
   };
   const json = { 'content-type': 'application/json' };
   const { message } = await api<{ message: string }>(`/api/auth/challenge?address=${wallet.address}`);
+  // The server writes the message: sign only a sign-in for this wallet.
+  const { address } = parseSiweMessage(message);
+  assert.ok(address && isAddressEqual(address, wallet.address), `the sign-in message is for ${address}, not ${wallet.address}`);
   const signature = await wallet.signMessage({ message });
   const { token } = await api<{ token: string }>('/api/auth/verify', { method: 'POST', headers: json, body: JSON.stringify({ message, signature }) });
   const created = await api<{ key: string; prefix: string; id: string }>('/api/api-keys', {
