@@ -57,7 +57,7 @@ console.log(await lc.getBalance()); // { balance: 999...n }
 
 | Member | Does |
 | --- | --- |
-| `new Lightchain({ network, account, payment?, depositWei?, onDeposit?, maxPaymentWei?, onPayment?, keyless?, agentOf?, fetch?, transport? })` | `network` is `"mainnet"`, `"testnet"`, or your own `Network` (a devnet). `account` is a viem local account. `payment` is `"delegate"` (the default: `depositWei`, `onDeposit`) or `"x402"` (`maxPaymentWei`, required, `onPayment` and `keyless`). `agentOf` makes `account` an agent key of that smart account ([agents](#agents-a-smart-account-and-an-agent-key)). |
+| `new Lightchain({ network, account, payment?, depositWei?, onDeposit?, maxPaymentWei?, onPayment?, keyless?, agentOf?, fetch?, transport? })` | `network` is `"mainnet"`, `"testnet"`, or your own `Network` (a devnet). `account` is a viem local account. `payment` is `"delegate"` (the default: `depositWei`, `onDeposit`) or `"x402"` (`maxPaymentWei`, required, `onPayment` and `keyless`). `agentOf` makes `account` an agent key of that smart account ([agents](#owner-and-agent-keys)). |
 | `createApiKey(input?)` | Signs in and mints a key bound to the wallet. `input`: `name`, `scope` (`chat` or `read`), `spendCapWei`, `requestsPerMinute`, `concurrentSessions`, `dailySpendCapWei`. The answer's `key` is shown this once. |
 | `signIn()` | The Sign-In with Ethereum token (one hour), for the other key routes (`GET`/`PATCH`/`DELETE /api/api-keys`). |
 | `fetch` | `fetch` that pays a `402` the way `payment` says and sends the request again, once. Give it to the OpenAI SDK. |
@@ -126,9 +126,25 @@ await lc.deposit(10n ** 18n); // once
 const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: "x402", fetch: lc.fetch });
 ```
 
-## Agents: a smart account and an agent key
+## Agents
 
-A key held by code (an agent, a backend) can become a smart account: the same address, now running LightChain's account code ([EIP-7702](https://eips.ethereum.org/EIPS/eip-7702)). Its owner then installs agent keys: signing keys the account holds to a list of contracts, a total spend cap and an expiry, so the agent never holds the owner key.
+Two ways to give a bot money to spend. Start with the first; move to the second when one wallet per bot stops being enough.
+
+### One bot, one wallet
+
+Make a key for the bot alone and fund it with only its budget. The bot gets that key and an API key: no smart account, no agent key. The wallet's balance is the cap.
+
+```ts
+const bot = new Lightchain({ network: "testnet", account: privateKeyToAccount(process.env.BOT_KEY as `0x${string}`) });
+const { key } = await bot.createApiKey({ name: "bot" });
+const openai = new OpenAI({ baseURL: bot.baseURL, apiKey: key, fetch: bot.fetch });
+```
+
+### Owner and agent keys
+
+For teams and fleets: worth it when several bots share one account, each with its own budget, or when the account holds more than one bot should spend. A leaked bot key is then revoked and replaced without moving funds or changing the address, and the owner key can stay offline.
+
+A key held by code becomes a smart account: the same address, now running LightChain's account code ([EIP-7702](https://eips.ethereum.org/EIPS/eip-7702)). Its owner then installs agent keys: signing keys the account holds to a list of contracts, a total spend cap and an expiry, so the bot never holds the owner key.
 
 ```ts
 import OpenAI from "openai";
