@@ -8,7 +8,7 @@ npm install @lightchain/sdk openai
 
 ## 1. Create a key in the chat: Developer → API keys
 
-The chat's Developer page (`/developer`) creates your API keys and lists them. A key carries a name, a scope (`chat` or `read`), rate limits and an optional lifetime spend cap. The key itself (`lcai_...`) is shown once: store it like a password. Every key you create spends from your one prepaid balance, which you top up in the chat.
+The chat's Developer page (`/developer`) creates your API keys and lists them. A key carries a name and an optional lifetime spend cap. Rate and concurrency are the API's, the same for every key. The key itself (`lcai_...`) is shown once: store it like a password. Every key you create spends from your one prepaid balance, which you top up in the chat.
 
 ## 2. One bot, one API key
 
@@ -87,7 +87,7 @@ On a `402` whose `accepts` lists the `prepaid-debit` requirements, `lc.fetch` si
 Before signing, the SDK checks the requirements against the network it was given: `network` is `eip155:<chainId>`, `asset` is the network's JobRegistry, the signing domain is `LightChain JobRegistry` version `1`, `payTo` and `facilitatorAddress` are addresses, `maxTimeoutSeconds` is between 1 and 600, and `amount` is at most `maxPaymentWei`. Requirements that fail a check are not signed: the 402 comes back with the reason at the start of `error.message`. So does a 402 that offers only the delegate way (an API that takes no x402 payments).
 
 - **Keyless, no key at all.** `lc.fetch` drops the `Authorization` header, and `lc.apiKey` is a placeholder for the OpenAI SDK, which insists on one. The API answers every call `402` with the x402 requirements alone, the SDK pays it, and the account is held, as payer, to the API's per-payer limits instead of a key's: by default 30 requests a minute, one call in flight, and 1 LCAI a day.
-- **With a key,** `lc.fetch` sends it on every call: it authenticates the call and holds it to the key's limits. A key whose wallet has a delegate gets no 402, so x402 pays only the calls the API asks it to pay.
+- **With a key,** `lc.fetch` sends it on every call: it authenticates the call and holds it to the API's limits for that key. A key whose wallet has a delegate gets no 402, so x402 pays only the calls the API asks it to pay.
 - **The modes do not mix.** x402 mode never sends `depositAndAuthorize`, and the default mode never signs an x402 payment.
 - **A refused payment comes back as the API answered it** (for example `402` `insufficient_funds`, or `invalid_prepaid_debit_payload_expired`), with the x402 reason as `error.code`. The SDK does not pay it again. The Developer API's Payment page lists the codes and what to do about each.
 

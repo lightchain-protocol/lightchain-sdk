@@ -7,7 +7,8 @@
 //
 // The key: LIGHTCHAIN_API_KEY, one the wallet created in the chat (Developer,
 // API keys); without it, the script mints one for the wallet the way that page
-// does, through the API's /api/auth and /api/api-keys routes.
+// does, through the API's /api/auth and /api/api-keys routes, with a lifetime
+// spend cap of LIGHTCHAIN_KEY_SPEND_CAP_WEI if set.
 // Another network (a devnet): set LIGHTCHAIN_API_URL, LIGHTCHAIN_RPC_URL,
 // LIGHTCHAIN_CHAIN_ID and LIGHTCHAIN_JOB_REGISTRY instead of LIGHTCHAIN_NETWORK.
 // Optional: LIGHTCHAIN_MODEL (default: the first listed), LIGHTCHAIN_DEPOSIT_WEI.
@@ -29,8 +30,12 @@ const network = env.LIGHTCHAIN_API_URL
   : ((env.LIGHTCHAIN_NETWORK ?? 'testnet') as 'mainnet' | 'testnet');
 const account = privateKeyToAccount(env.WALLET_PRIVATE_KEY as Hex);
 
-/** Signs in with Sign-In with Ethereum and mints an API key for the wallet, as the chat's API keys page does. */
-async function mintApiKey(apiUrl: string, wallet: LocalAccount, name: string): Promise<string> {
+/**
+ * Signs in with Sign-In with Ethereum and mints an API key for the wallet, as
+ * the chat's API keys page does: a name and an optional lifetime spend cap are
+ * all a key has.
+ */
+async function mintApiKey(apiUrl: string, wallet: LocalAccount, name: string, spendCapWei?: string): Promise<string> {
   const api = async <T>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(`${apiUrl}${path}`, init);
     const body: unknown = await response.json().catch(() => undefined);
@@ -47,14 +52,14 @@ async function mintApiKey(apiUrl: string, wallet: LocalAccount, name: string): P
   const created = await api<{ key: string; prefix: string; id: string }>('/api/api-keys', {
     method: 'POST',
     headers: { ...json, authorization: `Bearer ${token}` },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, spendCapWei }),
   });
-  console.log(`minted key ${created.prefix}... (id ${created.id}) by Sign-In with Ethereum`);
+  console.log(`minted key ${created.prefix}... (id ${created.id}, spend cap ${spendCapWei ?? 'none'}) by Sign-In with Ethereum`);
   return created.key;
 }
 
 const { apiUrl } = typeof network === 'string' ? networks[network] : network;
-const apiKey = env.LIGHTCHAIN_API_KEY ?? (await mintApiKey(apiUrl, account, 'sdk-acceptance'));
+const apiKey = env.LIGHTCHAIN_API_KEY ?? (await mintApiKey(apiUrl, account, 'sdk-acceptance', env.LIGHTCHAIN_KEY_SPEND_CAP_WEI));
 const deposits: Deposit[] = [];
 const lc = new Lightchain({
   network,

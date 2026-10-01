@@ -13,7 +13,7 @@
         "tags": [
           "API keys"
         ],
-        "description": "Mints a key bound to the signed-in wallet. The response is the only one that ever carries the key.",
+        "description": "Mints a key bound to the signed-in wallet. The response is the only one that ever carries the key. Fields other than name and spendCapWei are ignored.",
         "requestBody": {
           "required": true,
           "content": {
@@ -26,31 +26,10 @@
                     "minLength": 1,
                     "maxLength": 64
                   },
-                  "scope": {
-                    "default": "chat",
-                    "description": "chat may run completions; read may only list models.",
-                    "type": "string",
-                    "enum": [
-                      "chat",
-                      "read"
-                    ]
-                  },
                   "spendCapWei": {
                     "description": "Lifetime spend cap, in wei; none if omitted.",
                     "type": "string",
                     "pattern": "^[1-9][0-9]{0,77}$"
-                  },
-                  "requestsPerMinute": {
-                    "nullable": true,
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 60
-                  },
-                  "concurrentSessions": {
-                    "nullable": true,
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 4
                   }
                 }
               }
@@ -73,10 +52,8 @@
                     "id",
                     "prefix",
                     "name",
-                    "scope",
                     "spendCapWei",
                     "spentWei",
-                    "limits",
                     "limitHits",
                     "createdAt",
                     "revokedAt",
@@ -95,14 +72,6 @@
                       "type": "string",
                       "nullable": true
                     },
-                    "scope": {
-                      "type": "string",
-                      "enum": [
-                        "chat",
-                        "read"
-                      ],
-                      "description": "chat may run completions; read may only list models."
-                    },
                     "spendCapWei": {
                       "type": "string",
                       "pattern": "^[0-9]+$",
@@ -113,23 +82,6 @@
                       "type": "string",
                       "pattern": "^[0-9]+$",
                       "description": "Spent so far, counted against spendCapWei."
-                    },
-                    "limits": {
-                      "type": "object",
-                      "description": "The limits enforced: the key's own where its owner set them, the server's ceilings elsewhere.",
-                      "required": [
-                        "requestsPerMinute",
-                        "concurrentSessions"
-                      ],
-                      "properties": {
-                        "requestsPerMinute": {
-                          "type": "integer"
-                        },
-                        "concurrentSessions": {
-                          "type": "integer",
-                          "description": "Completions in flight at once."
-                        }
-                      }
                     },
                     "limitHits": {
                       "type": "object",
@@ -315,10 +267,8 @@
                           "id",
                           "prefix",
                           "name",
-                          "scope",
                           "spendCapWei",
                           "spentWei",
-                          "limits",
                           "limitHits",
                           "createdAt",
                           "revokedAt"
@@ -336,14 +286,6 @@
                             "type": "string",
                             "nullable": true
                           },
-                          "scope": {
-                            "type": "string",
-                            "enum": [
-                              "chat",
-                              "read"
-                            ],
-                            "description": "chat may run completions; read may only list models."
-                          },
                           "spendCapWei": {
                             "type": "string",
                             "pattern": "^[0-9]+$",
@@ -354,23 +296,6 @@
                             "type": "string",
                             "pattern": "^[0-9]+$",
                             "description": "Spent so far, counted against spendCapWei."
-                          },
-                          "limits": {
-                            "type": "object",
-                            "description": "The limits enforced: the key's own where its owner set them, the server's ceilings elsewhere.",
-                            "required": [
-                              "requestsPerMinute",
-                              "concurrentSessions"
-                            ],
-                            "properties": {
-                              "requestsPerMinute": {
-                                "type": "integer"
-                              },
-                              "concurrentSessions": {
-                                "type": "integer",
-                                "description": "Completions in flight at once."
-                              }
-                            }
                           },
                           "limitHits": {
                             "type": "object",
@@ -1040,49 +965,6 @@
                           "type": "string",
                           "pattern": "^[0-9]+$",
                           "description": "The key's lifetime spend cap."
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key has the read scope (code insufficient_scope).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "The key has the read scope (code insufficient_scope).",
-                  "type": "object",
-                  "required": [
-                    "error"
-                  ],
-                  "properties": {
-                    "error": {
-                      "type": "object",
-                      "required": [
-                        "message",
-                        "type",
-                        "param",
-                        "code"
-                      ],
-                      "properties": {
-                        "message": {
-                          "type": "string"
-                        },
-                        "type": {
-                          "type": "string",
-                          "description": "OpenAI error type, e.g. invalid_request_error, insufficient_quota, requests."
-                        },
-                        "param": {
-                          "type": "string",
-                          "nullable": true
-                        },
-                        "code": {
-                          "type": "string",
-                          "description": "Machine-readable reason; see each status.",
-                          "nullable": true
                         }
                       }
                     }
