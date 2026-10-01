@@ -57,13 +57,15 @@ console.log(await lc.getBalance()); // { balance: 999...n }
 
 | Member | Does |
 | --- | --- |
-| `new Lightchain({ network, account, payment?, depositWei?, onDeposit?, maxPaymentWei?, onPayment?, fetch?, transport? })` | `network` is `"mainnet"`, `"testnet"`, or your own `Network` (a devnet). `account` is a viem local account. `payment` is `"delegate"` (the default: `depositWei`, `onDeposit`) or `"x402"` (`maxPaymentWei`, required, and `onPayment`). |
+| `new Lightchain({ network, account, payment?, depositWei?, onDeposit?, maxPaymentWei?, onPayment?, agentOf?, fetch?, transport? })` | `network` is `"mainnet"`, `"testnet"`, or your own `Network` (a devnet). `account` is a viem local account. `payment` is `"delegate"` (the default: `depositWei`, `onDeposit`) or `"x402"` (`maxPaymentWei`, required, and `onPayment`). `agentOf` makes `account` an agent key of that smart account ([agents](#agents-a-smart-account-and-an-agent-key)). |
 | `createApiKey(input?)` | Signs in and mints a key bound to the wallet. `input`: `name`, `scope` (`chat` or `read`), `spendCapWei`, `requestsPerMinute`, `concurrentSessions`, `dailySpendCapWei`. The answer's `key` is shown this once. |
 | `signIn()` | The Sign-In with Ethereum token (one hour), for the other key routes (`GET`/`PATCH`/`DELETE /api/api-keys`). |
 | `fetch` | `fetch` that pays a `402` the way `payment` says and sends the request again, once. Give it to the OpenAI SDK. |
 | `depositAndAuthorize(delegate, value)` | Sends the transaction yourself: adds `value` to the balance, authorizes `delegate` (the API's signer) and raises its allowance by `value`. Resolves with the transaction hash once it succeeded. |
 | `deposit(value)` | Adds `value` to the prepaid balance and authorizes nobody: what x402 pays from. Resolves with the transaction hash once it succeeded. |
 | `getBalance(delegate?)` | The prepaid balance; with `delegate`, also whether it is authorized and its remaining allowance. |
+| `setupAccount({ apiKey, depositWei })` | Makes the wallet a smart account through the API's sponsor, which pays the gas, depositing `depositWei` and authorizing the API's delegate. Once per account. |
+| `installAgentKey(key, { targets, spendCapWei, expiry, gasWei? })` / `revokeAgentKey(key)` | The smart account's owner installs or revokes an agent key, in its own transaction. |
 | `baseURL`, `address`, `network` | The OpenAI base URL, the wallet, the endpoints in use. |
 
 ### Paying a 402 through the delegate
@@ -114,9 +116,40 @@ Before signing, the SDK checks the requirements against the network it was given
 - **The API key still goes with every call.** It authenticates the call and holds it to the key's limits. The payer is the account, usually the wallet that minted the key.
 - **A refused payment comes back as the API answered it** (for example `402` `insufficient_funds`, or `invalid_prepaid_debit_payload_expired`), with the x402 reason as `error.code`. The SDK does not pay it again. The Developer API's Payment page lists the codes and what to do about each.
 
+## Agents: a smart account and an agent key
+
+A key held by code (an agent, a backend) can become a smart account: the same address, now running LightChain's account code ([EIP-7702](https://eips.ethereum.org/EIPS/eip-7702)). Its owner then installs agent keys: signing keys the account holds to a list of contracts, a total spend cap and an expiry, so the agent never holds the owner key.
+
+```ts
+import OpenAI from "openai";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { Lightchain } from "@lightchain/sdk";
+
+// The owner: a fresh key holding some LCAI. The sponsor pays the setup's gas.
+const owner = new Lightchain({ network: "testnet", account: privateKeyToAccount(process.env.OWNER_KEY as `0x${string}`) });
+const { key } = await owner.createApiKey({ name: "agent" });
+await owner.setupAccount({ apiKey: key, depositWei: 10n ** 18n });
+
+const agentKey = privateKeyToAccount(generatePrivateKey());
+const limits = { targets: [owner.network.jobRegistry], spendCapWei: 5n * 10n ** 18n, expiry: new Date(Date.now() + 7 * 86_400_000) };
+await owner.installAgentKey(agentKey.address, { ...limits, gasWei: 10n ** 16n });
+
+// The agent holds the agent key and the API key, never the owner key.
+const agent = new Lightchain({ network: "testnet", account: agentKey, agentOf: owner.address });
+const openai = new OpenAI({ baseURL: agent.baseURL, apiKey: key, fetch: agent.fetch });
+await openai.chat.completions.create({ model: "gemma4:e2b", messages: [{ role: "user", content: "Hello" }] });
+```
+
+- **`setupAccount`** signs the EIP-7702 authorization for the network's account code and a batch of one `depositAndAuthorize` of the API's delegate, and `POST /v1/account/setup` has the sponsor send both as one transaction and pay its gas. The deposit is the account's own LCAI. It resolves once the account runs the code; a refusal (`already_sponsored`, `simulation_reverted`, `fee_cap_exceeded`, ...) throws a `LightchainError` with that `code`. The sponsor pays for one setup per account.
+- **The owner's own transactions** install and revoke agent keys, and the account pays their gas: keep some LCAI in it after the deposit. `installAgentKey` replaces the limits a key already had.
+- **A client with `agentOf`** pays for the smart account: `address` and `getBalance()` are the account's, and when the API answers `402` its `fetch` pays with a `depositAndAuthorize` batch the agent key signs. The agent key submits each batch itself and pays its gas from its own LCAI (`gasWei`). The account refuses a batch that calls a contract outside `targets` (whole contracts), sends more of its LCAI than is left of `spendCapWei`, or comes after `expiry`; viem names the error (`AgentKeySpendCapExceeded`, ...). The cap counts only LCAI the batches send: a key allowed on JobRegistry can call any JobRegistry function as the account, authorizing a delegate or submitting jobs from its prepaid balance included.
+- **The API key is the owner's.** The Developer API authenticates a completion by its API key and bills the wallet that minted it, here the smart account. An agent key cannot sign in for the account, so it cannot mint keys, and it cannot sign x402 payments (JobRegistry takes only the payer's own signature): its client refuses both. Hand the agent the API key with the agent key.
+
+`setupAccount` needs the network's `accountImplementation`: `mainnet` and `testnet` name none until the account code and the sponsor are deployed there, so pass your own `Network` meanwhile.
+
 ## Networks
 
-`networks` holds the published endpoints and addresses; `jobRegistryAbi` holds the JobRegistry functions the SDK calls, cut from the compiled contracts.
+`networks` holds the published endpoints and addresses; `jobRegistryAbi` holds the JobRegistry functions the SDK calls, cut from the compiled contracts, and `lightChainAccountAbi` the smart account's (`agentKey(key)` reads a key's limits).
 
 | | Chain | API (`apiUrl`) | RPC | JobRegistry |
 | --- | --- | --- | --- | --- |
@@ -135,6 +168,7 @@ npm run build       # dist/
 npm run abi         # regenerate src/abi.ts from ../pkg/chain/abis (after `make bindings`)
 WALLET_PRIVATE_KEY=0x... npm run acceptance   # end to end on testnet; see scripts/acceptance.ts
 WALLET_PRIVATE_KEY=0x... npm run acceptance:x402   # x402 mode, then delegate mode; see scripts/acceptance-x402.ts
+WALLET_PRIVATE_KEY=0x... npm run acceptance:account   # a fresh key: setup, agent key, completion; see scripts/acceptance-account.ts
 ```
 
 The fixtures in `test/fixtures` were recorded from a local devnet (`make devnet-full`, chain 48221) with Foundry's publicly known test account 7. The x402 tests sign the scheme's published test vectors (`../scripts/x402-vectors/vectors.json`) byte for byte, with Foundry's test account 3. Never use either key on a real network.

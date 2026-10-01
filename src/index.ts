@@ -1,5 +1,7 @@
 export { jobRegistryAbi } from './abi.ts';
+export { lightChainAccountAbi } from './account.ts';
 export {
+  type AgentKeyLimits,
   type ApiKey,
   type Balance,
   type CreateApiKeyInput,

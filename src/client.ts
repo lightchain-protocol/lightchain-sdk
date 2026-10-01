@@ -5,6 +5,7 @@ import {
   createPublicClient,
   createWalletClient,
   defineChain,
+  encodeFunctionData,
   type Hex,
   http,
   isAddress,
@@ -16,6 +17,7 @@ import {
 } from 'viem';
 import { parseSiweMessage } from 'viem/siwe';
 import { jobRegistryAbi } from './abi.ts';
+import { BATCH_MODE, type Call, encodeCalls, lightChainAccountAbi, SIGNED_BATCH_MODE, signBatch, signedExecutionData } from './account.ts';
 import { type Network, networks } from './networks.ts';
 
 export type LightchainOptions = {
@@ -27,6 +29,12 @@ export type LightchainOptions = {
   fetch?: typeof fetch;
   /** The chain's JSON-RPC transport; HTTP to the network's rpcUrl by default. */
   transport?: Transport;
+  /**
+   * The smart account `account` is an agent key of. The client then pays for
+   * that account: its deposits are batches the agent key signs and submits,
+   * paying their gas, within the key's limits. It cannot sign in or mint keys.
+   */
+  agentOf?: Address;
 } & (DelegatePayment | X402Payment);
 
 /** The default: `fetch` pays a 402 by authorizing the API's delegate, with a depositAndAuthorize transaction. */
@@ -93,6 +101,16 @@ export type ApiKey = {
   revokedAt: string | null;
 };
 
+/** What an agent key may do with its smart account; the account enforces them on every batch the key signs. */
+export type AgentKeyLimits = {
+  /** The contracts its batches may call (whole contracts), never the account itself. */
+  targets: Address[];
+  /** The account's LCAI its batches may send, in wei, over the key's lifetime. */
+  spendCapWei: bigint;
+  /** The last moment its batches are accepted. */
+  expiry: Date;
+};
+
 /** The on-chain job behind a completion: its `lightchain` field, and the `x-lightchain` header as JSON. */
 export type LightchainJob = { job_id: string; session_id: string; tx_hash: Hex; worker: Address };
 
@@ -134,6 +152,9 @@ const DEBIT_AUTHORIZATION = {
 } as const;
 /** The longest a signed authorization may stay valid: the scheme asks for 120 s. */
 const MAX_TIMEOUT_SECONDS = 600;
+
+/** The API takes wei as decimal strings: a JSON.stringify replacer. */
+const bigintsAsStrings = (_: string, v: unknown) => (typeof v === 'bigint' ? v.toString() : v);
 
 /** x402 headers carry base64 of UTF-8 JSON. */
 const toBase64 = (json: string) => btoa(String.fromCharCode(...new TextEncoder().encode(json)));
@@ -188,19 +209,22 @@ export class Lightchain {
   readonly #publicClient: PublicClient;
   readonly #walletClient: WalletClient<Transport, Chain, LocalAccount>;
   readonly #registry: { address: Address; abi: typeof jobRegistryAbi };
+  /** Signing as an agent key of the smart account at `address`. */
+  readonly #agent: boolean;
   /** How a 402 is paid: by a transaction (delegate) or by a signature (x402), never both. */
   readonly #payment: 'delegate' | 'x402';
   readonly #depositWei: bigint | undefined;
   readonly #onDeposit: ((deposit: Deposit) => void) | undefined;
   readonly #maxPaymentWei: bigint = 0n;
   readonly #onPayment: ((payment: Payment) => void) | undefined;
-  /** The last deposit sent: the next one waits for it. */
-  #lastDeposit: Promise<unknown> = Promise.resolve();
+  /** The last transaction sent: the next one waits for it. */
+  #lastSent: Promise<unknown> = Promise.resolve();
 
   constructor(options: LightchainOptions) {
     this.network = typeof options.network === 'string' ? networks[options.network] : options.network;
     this.#account = options.account;
-    this.address = options.account.address;
+    this.address = options.agentOf ?? options.account.address;
+    this.#agent = options.agentOf !== undefined;
     this.baseURL = `${this.network.apiUrl}/v1`;
     // Called unbound: a browser's fetch refuses any other `this`.
     const fetch = options.fetch ?? globalThis.fetch;
@@ -209,6 +233,8 @@ export class Lightchain {
     // The mode is explicit: an option of the other mode would be silently ignored, so it is refused.
     const given = (names: string[]) => names.filter((n) => (options as Record<string, unknown>)[n] !== undefined);
     if (options.payment === 'x402') {
+      // JobRegistry takes only a debit the payer's own key signed.
+      if (this.#agent) throw new Error('An agent key cannot sign x402 payments for its account: use payment "delegate".');
       if (given(['depositWei', 'onDeposit']).length) throw new Error('depositWei and onDeposit belong to payment "delegate".');
       // No default: what a 402 may take is the builder's call.
       if (typeof options.maxPaymentWei !== 'bigint' || options.maxPaymentWei <= 0n) {
@@ -306,9 +332,9 @@ export class Lightchain {
    * Resolves with the transaction hash once it succeeded on chain.
    */
   depositAndAuthorize(delegate: Address, value: bigint): Promise<Hex> {
-    return this.#send('depositAndAuthorize', () =>
-      this.#walletClient.writeContract({ ...this.#registry, functionName: 'depositAndAuthorize', args: [delegate], value }),
-    );
+    const call = { ...this.#registry, functionName: 'depositAndAuthorize', args: [delegate], value } as const;
+    if (this.#agent) return this.#execute('depositAndAuthorize', [{ to: call.address, value, data: encodeFunctionData(call) }]);
+    return this.#send('depositAndAuthorize', () => this.#walletClient.writeContract(call));
   }
 
   /**
@@ -317,20 +343,61 @@ export class Lightchain {
    * with the transaction hash once it succeeded on chain.
    */
   deposit(value: bigint): Promise<Hex> {
-    return this.#send('deposit', () => this.#walletClient.writeContract({ ...this.#registry, functionName: 'deposit', value }));
+    const call = { ...this.#registry, functionName: 'deposit', value } as const;
+    if (this.#agent) return this.#execute('deposit', [{ to: call.address, value, data: encodeFunctionData(call) }]);
+    return this.#send('deposit', () => this.#walletClient.writeContract(call));
+  }
+
+  /**
+   * Installs `key` as an agent key of this smart account, replacing any limits
+   * it had. Sent as the owner's own transaction, which pays its gas from the
+   * account; `gasWei` also sends the key that much of the account's LCAI, for
+   * the gas of the batches it submits. Resolves with the transaction hash once
+   * it succeeded.
+   */
+  installAgentKey(key: Address, { targets, spendCapWei, expiry, gasWei = 0n }: AgentKeyLimits & { gasWei?: bigint }): Promise<Hex> {
+    const seconds = BigInt(Math.floor(expiry.getTime() / 1000));
+    const data = encodeFunctionData({ abi: lightChainAccountAbi, functionName: 'installAgentKey', args: [key, targets, spendCapWei, seconds] });
+    const install = { to: this.address, value: 0n, data };
+    return this.#execute('installAgentKey', gasWei ? [install, { to: key, value: gasWei, data: '0x' }] : [install]);
+  }
+
+  /** Revokes agent key `key`: the account refuses its batches from then on. The owner's own transaction, as installAgentKey. */
+  revokeAgentKey(key: Address): Promise<Hex> {
+    const data = encodeFunctionData({ abi: lightChainAccountAbi, functionName: 'revokeAgentKey', args: [key] });
+    return this.#execute('revokeAgentKey', [{ to: this.address, value: 0n, data }]);
+  }
+
+  /**
+   * Executes `calls` as one batch of the smart account and waits for it to
+   * succeed: the owner's own transaction, or with an agent key, the batch the
+   * key signed, which it submits and pays the gas of itself.
+   */
+  #execute(name: string, calls: Call[]): Promise<Hex> {
+    const account = { address: this.address, abi: lightChainAccountAbi } as const;
+    return this.#send(name, async () => {
+      if (!this.#agent) {
+        return this.#walletClient.writeContract({ ...account, functionName: 'execute', args: [BATCH_MODE, encodeCalls(calls)] });
+      }
+      // Read in the queue: the key's batch before this one has taken its nonce.
+      const nonce = await this.#publicClient.readContract({ ...account, functionName: 'batchNonce', args: [this.#account.address] });
+      const batch = await signBatch(this.#account, this.address, this.network.chainId, calls, nonce);
+      const executionData = signedExecutionData(calls, batch);
+      return this.#walletClient.writeContract({ ...account, functionName: 'execute', args: [SIGNED_BATCH_MODE, executionData] });
+    });
   }
 
   /** Sends a transaction once the one before it is done, and waits for it to succeed. */
   #send(name: string, write: () => Promise<Hex>): Promise<Hex> {
     // One at a time: each transaction reads the account's nonce, so two sent
     // together would take the same one.
-    const sent = this.#lastDeposit.then(async () => {
+    const sent = this.#lastSent.then(async () => {
       const hash = await write();
       const receipt = await this.#publicClient.waitForTransactionReceipt({ hash });
       if (receipt.status !== 'success') throw new Error(`${name} ${hash} reverted.`);
       return hash;
     });
-    this.#lastDeposit = sent.catch(() => undefined);
+    this.#lastSent = sent.catch(() => undefined);
     return sent;
   }
 
@@ -415,6 +482,8 @@ export class Lightchain {
    * It lasts an hour.
    */
   async signIn(): Promise<string> {
+    // The account's sign-in takes the owner's signature.
+    if (this.#agent) throw new Error('An agent key cannot sign in for its account: mint API keys with the owner key.');
     const { message } = await this.#api<{ message: string }>(`/api/auth/challenge?address=${this.address}`);
     // The server writes the message; sign only a sign-in for this wallet.
     const { address } = parseSiweMessage(message);
@@ -439,9 +508,45 @@ export class Lightchain {
     return this.#api('/api/api-keys', {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      // The API takes wei as decimal strings.
-      body: JSON.stringify(input, (_, v) => (typeof v === 'bigint' ? v.toString() : v)),
+      body: JSON.stringify(input, bigintsAsStrings),
     });
+  }
+
+  /**
+   * Makes the wallet, a key held by code, a smart account, with its gas paid
+   * by the Developer API's sponsor: signs an EIP-7702 authorization for the
+   * network's account code (`accountImplementation`) and a batch of one
+   * depositAndAuthorize of the API's delegate with `depositWei` of the
+   * account's own LCAI, and the sponsor sends both as one transaction.
+   * `apiKey` is a `chat` key of this wallet (createApiKey). Resolves with the
+   * transaction hash once the account runs the account code. The sponsor pays
+   * for one setup per account; a refusal throws a LightchainError with its code.
+   */
+  async setupAccount({ apiKey, depositWei }: { apiKey: string; depositWei: bigint }): Promise<Hex> {
+    const implementation = this.network.accountImplementation;
+    if (!implementation) {
+      throw new Error(`Network ${this.network.chainId} names no accountImplementation: the account code the sponsor pays for.`);
+    }
+    const token = await this.signIn();
+    const { delegate } = await this.#api<{ delegate: Address }>('/api/balance', { headers: { authorization: `Bearer ${token}` } });
+    const data = encodeFunctionData({ ...this.#registry, functionName: 'depositAndAuthorize', args: [delegate] });
+    const calls = [{ to: this.network.jobRegistry, value: depositWei, data }];
+    const { address, chainId, nonce, r, s, yParity } = await this.#walletClient.signAuthorization({ contractAddress: implementation });
+    // ponytail: batch nonce 0, a fresh key's first batch. An account that
+    // adopted the code and ran batches before is refused in simulation.
+    const batch = await signBatch(this.#account, this.address, chainId, calls, 0n);
+    const { tx_hash: hash } = await this.#api<{ tx_hash: Hex }>('/v1/account/setup', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ authorization: { address, chainId, nonce, r, s, yParity }, calls, ...batch }, bigintsAsStrings),
+    });
+    // Also when the sponsor answered before the transaction was mined (202, pending).
+    const receipt = await this.#publicClient.waitForTransactionReceipt({ hash });
+    const code = await this.#publicClient.getCode({ address: this.address });
+    if (receipt.status !== 'success' || code?.toLowerCase() !== `0xef0100${implementation.slice(2).toLowerCase()}`) {
+      throw new Error(`The setup ${hash} did not make ${this.address} a smart account: ${receipt.status}, code ${code ?? '0x'}.`);
+    }
+    return hash;
   }
 
   async #api<T>(path: string, init?: RequestInit): Promise<T> {
