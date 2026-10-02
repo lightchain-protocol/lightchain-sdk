@@ -6,404 +6,6 @@
     "version": "0.1.0"
   },
   "paths": {
-    "/api/api-keys": {
-      "post": {
-        "operationId": "createApiKey",
-        "summary": "Mint an API key",
-        "tags": [
-          "API keys"
-        ],
-        "description": "Mints a key bound to the signed-in wallet. The response is the only one that ever carries the key. Fields other than name and spendCapWei are ignored.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 64
-                  },
-                  "spendCapWei": {
-                    "description": "Lifetime spend cap, in wei; none if omitted.",
-                    "type": "string",
-                    "pattern": "^[1-9][0-9]{0,77}$"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "The key, shown this once.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "id",
-                    "prefix",
-                    "name",
-                    "spendCapWei",
-                    "spentWei",
-                    "limitHits",
-                    "createdAt",
-                    "revokedAt",
-                    "key"
-                  ],
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "format": "uuid"
-                    },
-                    "prefix": {
-                      "type": "string",
-                      "description": "The start of the key, to recognise it by."
-                    },
-                    "name": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "spendCapWei": {
-                      "type": "string",
-                      "pattern": "^[0-9]+$",
-                      "description": "Lifetime spend cap; null is uncapped.",
-                      "nullable": true
-                    },
-                    "spentWei": {
-                      "type": "string",
-                      "pattern": "^[0-9]+$",
-                      "description": "Spent so far, counted against spendCapWei."
-                    },
-                    "limitHits": {
-                      "type": "object",
-                      "description": "How often each limit has refused the key.",
-                      "required": [
-                        "rate",
-                        "concurrency",
-                        "spendCap",
-                        "sessionOpens"
-                      ],
-                      "properties": {
-                        "rate": {
-                          "type": "integer"
-                        },
-                        "concurrency": {
-                          "type": "integer"
-                        },
-                        "spendCap": {
-                          "type": "integer"
-                        },
-                        "sessionOpens": {
-                          "type": "integer"
-                        }
-                      }
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
-                    },
-                    "revokedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "nullable": true
-                    },
-                    "key": {
-                      "type": "string",
-                      "description": "The API key (lcai_...)."
-                    }
-                  },
-                  "description": "The key, shown this once."
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "The request is invalid (error validation_error), or its body is not JSON (error Bad Request).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "The request is invalid (error validation_error), or its body is not JSON (error Bad Request).",
-                  "type": "object",
-                  "required": [
-                    "error"
-                  ],
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing or expired sign-in token.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "Missing or expired sign-in token.",
-                  "type": "object",
-                  "required": [
-                    "error"
-                  ],
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "The wallet holds as many active keys as it may (error api_key_limit); revoke one first.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "The wallet holds as many active keys as it may (error api_key_limit); revoke one first.",
-                  "type": "object",
-                  "required": [
-                    "error"
-                  ],
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Too many calls from this wallet (60 a minute).",
-            "headers": {
-              "retry-after": {
-                "schema": {
-                  "type": "integer"
-                },
-                "description": "Seconds until the same call may pass."
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "Too many calls from this wallet (60 a minute).",
-                  "type": "object",
-                  "required": [
-                    "statusCode",
-                    "error",
-                    "retryAfterSec"
-                  ],
-                  "properties": {
-                    "statusCode": {
-                      "type": "integer",
-                      "enum": [
-                        429
-                      ]
-                    },
-                    "error": {
-                      "type": "string",
-                      "enum": [
-                        "rate_limited"
-                      ]
-                    },
-                    "retryAfterSec": {
-                      "type": "integer"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
-      "get": {
-        "operationId": "listApiKeys",
-        "summary": "List API keys",
-        "tags": [
-          "API keys"
-        ],
-        "description": "Every key the signed-in wallet has minted, revoked ones included, newest first. Never the keys themselves.",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The wallet's keys.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "The wallet's keys.",
-                  "type": "object",
-                  "required": [
-                    "keys"
-                  ],
-                  "properties": {
-                    "keys": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "required": [
-                          "id",
-                          "prefix",
-                          "name",
-                          "spendCapWei",
-                          "spentWei",
-                          "limitHits",
-                          "createdAt",
-                          "revokedAt"
-                        ],
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "format": "uuid"
-                          },
-                          "prefix": {
-                            "type": "string",
-                            "description": "The start of the key, to recognise it by."
-                          },
-                          "name": {
-                            "type": "string",
-                            "nullable": true
-                          },
-                          "spendCapWei": {
-                            "type": "string",
-                            "pattern": "^[0-9]+$",
-                            "description": "Lifetime spend cap; null is uncapped.",
-                            "nullable": true
-                          },
-                          "spentWei": {
-                            "type": "string",
-                            "pattern": "^[0-9]+$",
-                            "description": "Spent so far, counted against spendCapWei."
-                          },
-                          "limitHits": {
-                            "type": "object",
-                            "description": "How often each limit has refused the key.",
-                            "required": [
-                              "rate",
-                              "concurrency",
-                              "spendCap",
-                              "sessionOpens"
-                            ],
-                            "properties": {
-                              "rate": {
-                                "type": "integer"
-                              },
-                              "concurrency": {
-                                "type": "integer"
-                              },
-                              "spendCap": {
-                                "type": "integer"
-                              },
-                              "sessionOpens": {
-                                "type": "integer"
-                              }
-                            }
-                          },
-                          "createdAt": {
-                            "type": "string",
-                            "format": "date-time"
-                          },
-                          "revokedAt": {
-                            "type": "string",
-                            "format": "date-time",
-                            "nullable": true
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing or expired sign-in token.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "Missing or expired sign-in token.",
-                  "type": "object",
-                  "required": [
-                    "error"
-                  ],
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Too many calls from this wallet (60 a minute).",
-            "headers": {
-              "retry-after": {
-                "schema": {
-                  "type": "integer"
-                },
-                "description": "Seconds until the same call may pass."
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "Too many calls from this wallet (60 a minute).",
-                  "type": "object",
-                  "required": [
-                    "statusCode",
-                    "error",
-                    "retryAfterSec"
-                  ],
-                  "properties": {
-                    "statusCode": {
-                      "type": "integer",
-                      "enum": [
-                        429
-                      ]
-                    },
-                    "error": {
-                      "type": "string",
-                      "enum": [
-                        "rate_limited"
-                      ]
-                    },
-                    "retryAfterSec": {
-                      "type": "integer"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/chat/completions": {
       "post": {
         "operationId": "createChatCompletion",
@@ -411,7 +13,7 @@
         "tags": [
           "Developer API"
         ],
-        "description": "Runs the conversation as one job on chain, paid from the prepaid balance of the wallet behind the key.\n\nSampling parameters (`temperature`, `max_tokens`, `top_p`, ...) are accepted and ignored: each worker runs a model with its own settings.\n\nWith `stream: true` the answer comes as server-sent events: `chat.completion.chunk` objects, then `data: [DONE]`. A failure after the first chunk ends the stream with a `data: {\"error\": ...}` event instead of `[DONE]`.",
+        "description": "Runs the conversation as one job on chain, paid from the prepaid balance of the wallet behind the key, or, with a PAYMENT-SIGNATURE header, by that x402 payment alone.\n\nWhere the server takes x402, the API key is optional: a call with no Authorization header is paid by its PAYMENT-SIGNATURE, and its payer is held to per-payer rate and concurrency limits in place of a key's. Without a payment it is answered 402 with the requirements to pay. An Authorization header that holds no valid key is refused 401, payment or not.\n\nSampling parameters (`temperature`, `max_tokens`, `top_p`, ...) are accepted and ignored: each worker runs a model with its own settings.\n\nWith `stream: true` the answer comes as server-sent events: `chat.completion.chunk` objects, then `data: [DONE]`. A failure after the first chunk ends the stream with a `data: {\"error\": ...}` event instead of `[DONE]`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -494,10 +96,22 @@
             }
           }
         },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "header",
+            "name": "payment-signature",
+            "required": false,
+            "description": "x402 PaymentPayload paying this call with LightChain's prepaid-debit scheme, as base64 of the JSON. Its `accepted` is the prepaid-debit entry of a 402's `accepts`. When present, it alone pays: the wallet behind the key is never charged, and a refused payment is answered rather than paid another way. With it, the API key may be left out."
+          }
+        ],
         "security": [
           {
             "apiKeyAuth": []
-          }
+          },
+          {}
         ],
         "responses": {
           "200": {
@@ -508,6 +122,12 @@
                   "type": "string"
                 },
                 "description": "The `lightchain` object, as JSON."
+              },
+              "payment-response": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "x402 SettleResponse, when the payment was settled or its settlement attempted. Base64 of the JSON."
               }
             },
             "content": {
@@ -614,6 +234,10 @@
                           "type": "string",
                           "pattern": "^0x[0-9a-fA-F]{40}$",
                           "description": "The worker that served the job."
+                        },
+                        "dropped_messages": {
+                          "type": "integer",
+                          "description": "How many of the conversation's oldest messages the job left out, to stay within the server's bound on what one job carries. Absent when it carried them all."
                         }
                       }
                     }
@@ -723,6 +347,10 @@
                               "type": "string",
                               "pattern": "^0x[0-9a-fA-F]{40}$",
                               "description": "The worker that served the job."
+                            },
+                            "dropped_messages": {
+                              "type": "integer",
+                              "description": "How many of the conversation's oldest messages the job left out, to stay within the server's bound on what one job carries. Absent when it carried them all."
                             }
                           }
                         }
@@ -770,11 +398,19 @@
             }
           },
           "400": {
-            "description": "The request is invalid (code null), or the prompt is too large for one job (code context_length_exceeded).",
+            "description": "The request is invalid (code null), the prompt is too large for one job (code context_length_exceeded), or its PAYMENT-SIGNATURE is malformed or not for this server (code invalid_payload, invalid_x402_version, unsupported_scheme, invalid_network or invalid_payment_requirements).",
+            "headers": {
+              "payment-required": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "x402 PaymentRequired, listing the prepaid-debit requirements alone; on answers to a payment, to a call the delegate cannot pay, and to a call with neither key nor payment. Base64 of the JSON."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "description": "The request is invalid (code null), or the prompt is too large for one job (code context_length_exceeded).",
+                  "description": "The request is invalid (code null), the prompt is too large for one job (code context_length_exceeded), or its PAYMENT-SIGNATURE is malformed or not for this server (code invalid_payload, invalid_x402_version, unsupported_scheme, invalid_network or invalid_payment_requirements).",
                   "type": "object",
                   "required": [
                     "error"
@@ -813,11 +449,11 @@
             }
           },
           "401": {
-            "description": "Missing, unknown or revoked API key (code invalid_api_key).",
+            "description": "Missing, unknown or revoked API key (code invalid_api_key). A call with no Authorization header gets this only where the server takes no x402 payments.",
             "content": {
               "application/json": {
                 "schema": {
-                  "description": "Missing, unknown or revoked API key (code invalid_api_key).",
+                  "description": "Missing, unknown or revoked API key (code invalid_api_key). A call with no Authorization header gets this only where the server takes no x402 payments.",
                   "type": "object",
                   "required": [
                     "error"
@@ -856,11 +492,25 @@
             }
           },
           "402": {
-            "description": "The call cannot be paid. Codes: delegate_not_authorized, insufficient_balance, allowance_exhausted (with `accepts`); spend_cap_exceeded (with `spend_cap_wei`).",
+            "description": "The call cannot be paid. Codes: delegate_not_authorized, insufficient_balance, allowance_exhausted (with `accepts`); spend_cap_exceeded (with `spend_cap_wei`). A call with neither an API key nor a PAYMENT-SIGNATURE, on a server that takes x402, gets payment_required, with `accepts`. A refused PAYMENT-SIGNATURE carries its x402 reason as the code, with `accepts`: invalid_prepaid_debit_payload_expired, invalid_prepaid_debit_payload_nonce_used, invalid_prepaid_debit_payload_signature (also a payer other than the signer), invalid_prepaid_debit_payload_over_cap, insufficient_funds, invalid_prepaid_debit_payload_facilitator_mismatch, invalid_prepaid_debit_payload_recipient_mismatch, invalid_prepaid_debit_facilitator_not_authorized, invalid_transaction_state.",
+            "headers": {
+              "payment-required": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "x402 PaymentRequired, listing the prepaid-debit requirements alone; on answers to a payment, to a call the delegate cannot pay, and to a call with neither key nor payment. Base64 of the JSON."
+              },
+              "payment-response": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "x402 SettleResponse, when the payment was settled or its settlement attempted. Base64 of the JSON."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "description": "The call cannot be paid. Codes: delegate_not_authorized, insufficient_balance, allowance_exhausted (with `accepts`); spend_cap_exceeded (with `spend_cap_wei`).",
+                  "description": "The call cannot be paid. Codes: delegate_not_authorized, insufficient_balance, allowance_exhausted (with `accepts`); spend_cap_exceeded (with `spend_cap_wei`). A call with neither an API key nor a PAYMENT-SIGNATURE, on a server that takes x402, gets payment_required, with `accepts`. A refused PAYMENT-SIGNATURE carries its x402 reason as the code, with `accepts`: invalid_prepaid_debit_payload_expired, invalid_prepaid_debit_payload_nonce_used, invalid_prepaid_debit_payload_signature (also a payer other than the signer), invalid_prepaid_debit_payload_over_cap, insufficient_funds, invalid_prepaid_debit_payload_facilitator_mismatch, invalid_prepaid_debit_payload_recipient_mismatch, invalid_prepaid_debit_facilitator_not_authorized, invalid_transaction_state.",
                   "type": "object",
                   "required": [
                     "error"
@@ -893,72 +543,142 @@
                         },
                         "accepts": {
                           "type": "array",
-                          "description": "The ways to pay, one per scheme.",
+                          "description": "The ways to pay, one per scheme: delegate first, then prepaid-debit where this server takes x402. A call with no key has no delegate entry: prepaid-debit alone.",
                           "items": {
-                            "type": "object",
-                            "description": "Pay from the wallet's prepaid balance through the API's delegate.",
-                            "required": [
-                              "scheme",
-                              "chain_id",
-                              "payer",
-                              "delegate",
-                              "instruction"
-                            ],
-                            "properties": {
-                              "scheme": {
-                                "type": "string",
-                                "enum": [
-                                  "delegate"
-                                ]
-                              },
-                              "chain_id": {
-                                "type": "integer"
-                              },
-                              "payer": {
-                                "type": "string",
-                                "pattern": "^0x[0-9a-fA-F]{40}$",
-                                "description": "The wallet behind the key."
-                              },
-                              "delegate": {
-                                "type": "string",
-                                "pattern": "^0x[0-9a-fA-F]{40}$",
-                                "description": "The API signer that submits jobs for the wallet."
-                              },
-                              "instruction": {
+                            "oneOf": [
+                              {
                                 "type": "object",
-                                "description": "The transaction the payer sends once, with at least `minimum_value_wei` attached.",
+                                "description": "Pay from the wallet's prepaid balance through the API's delegate.",
                                 "required": [
-                                  "contract",
-                                  "function",
-                                  "args",
-                                  "minimum_value_wei"
+                                  "scheme",
+                                  "chain_id",
+                                  "payer",
+                                  "delegate",
+                                  "instruction"
                                 ],
                                 "properties": {
-                                  "contract": {
-                                    "type": "string",
-                                    "pattern": "^0x[0-9a-fA-F]{40}$",
-                                    "description": "JobRegistry."
-                                  },
-                                  "function": {
+                                  "scheme": {
                                     "type": "string",
                                     "enum": [
-                                      "depositAndAuthorize(address)"
+                                      "delegate"
                                     ]
                                   },
-                                  "args": {
-                                    "type": "array",
-                                    "items": {
-                                      "type": "string"
-                                    }
+                                  "chain_id": {
+                                    "type": "integer"
                                   },
-                                  "minimum_value_wei": {
+                                  "payer": {
+                                    "type": "string",
+                                    "pattern": "^0x[0-9a-fA-F]{40}$",
+                                    "description": "The wallet behind the key."
+                                  },
+                                  "delegate": {
+                                    "type": "string",
+                                    "pattern": "^0x[0-9a-fA-F]{40}$",
+                                    "description": "The API signer that submits jobs for the wallet."
+                                  },
+                                  "instruction": {
+                                    "type": "object",
+                                    "description": "The transaction the payer sends once, with at least `minimum_value_wei` attached.",
+                                    "required": [
+                                      "contract",
+                                      "function",
+                                      "args",
+                                      "minimum_value_wei"
+                                    ],
+                                    "properties": {
+                                      "contract": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-fA-F]{40}$",
+                                        "description": "JobRegistry."
+                                      },
+                                      "function": {
+                                        "type": "string",
+                                        "enum": [
+                                          "depositAndAuthorize(address)"
+                                        ]
+                                      },
+                                      "args": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "minimum_value_wei": {
+                                        "type": "string",
+                                        "pattern": "^[0-9]+$",
+                                        "description": "An amount in wei, as a decimal string."
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "description": "x402 PaymentRequirements of LightChain's prepaid-debit scheme: pay this one call with a signed debit authorization against the payer's prepaid balance, sent in PAYMENT-SIGNATURE. Copy it verbatim into the payment's `accepted`.",
+                                "required": [
+                                  "scheme",
+                                  "network",
+                                  "amount",
+                                  "asset",
+                                  "payTo",
+                                  "maxTimeoutSeconds",
+                                  "extra"
+                                ],
+                                "properties": {
+                                  "scheme": {
+                                    "type": "string",
+                                    "enum": [
+                                      "prepaid-debit"
+                                    ]
+                                  },
+                                  "network": {
+                                    "type": "string",
+                                    "description": "CAIP-2 chain id, e.g. eip155:8200."
+                                  },
+                                  "amount": {
                                     "type": "string",
                                     "pattern": "^[0-9]+$",
-                                    "description": "An amount in wei, as a decimal string."
+                                    "description": "The job's fee: the most the call debits."
+                                  },
+                                  "asset": {
+                                    "type": "string",
+                                    "pattern": "^0x[0-9a-fA-F]{40}$",
+                                    "description": "JobRegistry: holds the balance debited and is the EIP-712 domain's verifying contract."
+                                  },
+                                  "payTo": {
+                                    "type": "string",
+                                    "pattern": "^0x[0-9a-fA-F]{40}$",
+                                    "description": "The owner of the session the job runs in: the API itself."
+                                  },
+                                  "maxTimeoutSeconds": {
+                                    "type": "integer"
+                                  },
+                                  "extra": {
+                                    "type": "object",
+                                    "required": [
+                                      "name",
+                                      "version",
+                                      "facilitatorAddress"
+                                    ],
+                                    "properties": {
+                                      "name": {
+                                        "type": "string",
+                                        "description": "EIP-712 domain name."
+                                      },
+                                      "version": {
+                                        "type": "string",
+                                        "description": "EIP-712 domain version."
+                                      },
+                                      "facilitatorAddress": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-fA-F]{40}$",
+                                        "description": "The only sender that may settle the authorization."
+                                      }
+                                    }
                                   }
                                 }
                               }
-                            }
+                            ]
                           }
                         },
                         "spend_cap_wei": {
@@ -1017,7 +737,7 @@
             }
           },
           "429": {
-            "description": "A limit refused the call (code rate_limit_exceeded, concurrency_limit_exceeded or session_open_limit_exceeded). Retry after `retry-after` seconds.",
+            "description": "A limit refused the call (code rate_limit_exceeded, concurrency_limit_exceeded or session_open_limit_exceeded; per key, or per payer on a call with no key). Retry after `retry-after` seconds.",
             "headers": {
               "retry-after": {
                 "schema": {
@@ -1029,7 +749,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "description": "A limit refused the call (code rate_limit_exceeded, concurrency_limit_exceeded or session_open_limit_exceeded). Retry after `retry-after` seconds.",
+                  "description": "A limit refused the call (code rate_limit_exceeded, concurrency_limit_exceeded or session_open_limit_exceeded; per key, or per payer on a call with no key). Retry after `retry-after` seconds.",
                   "type": "object",
                   "required": [
                     "error"
@@ -1111,11 +831,19 @@
             }
           },
           "502": {
-            "description": "The job failed (code job_failed).",
+            "description": "The job failed (code job_failed), or the x402 facilitator could not check or settle the payment (code unexpected_verify_error or unexpected_settle_error; send the same payment again).",
+            "headers": {
+              "payment-response": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "x402 SettleResponse, when the payment was settled or its settlement attempted. Base64 of the JSON."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "description": "The job failed (code job_failed).",
+                  "description": "The job failed (code job_failed), or the x402 facilitator could not check or settle the payment (code unexpected_verify_error or unexpected_settle_error; send the same payment again).",
                   "type": "object",
                   "required": [
                     "error"
