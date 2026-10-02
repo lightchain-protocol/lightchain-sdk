@@ -30,9 +30,9 @@ const completions = (spec.paths as unknown as Record<string, Record<string, Oper
 const answer = (status: number) => completions.responses[status].content['application/json'].schema;
 
 /** The published `accepts` entry of a payment scheme. */
-function scheme(name: string): Schema {
-  const entry = answer(402).properties!.error.properties!.accepts.items!.oneOf!.find((s) => s.properties!.scheme.enum!.includes(name));
-  assert.ok(entry, `the published 402 offers no ${name} entry`);
+function offer(scheme: string): Schema {
+  const entry = answer(402).properties!.error.properties!.accepts.items!.oneOf!.find((s) => s.properties!.scheme.enum!.includes(scheme));
+  assert.ok(entry, `the published 402 offers no ${scheme} entry`);
   return entry;
 }
 
@@ -41,17 +41,18 @@ const sortedRequired = (...schemas: Schema[]) => schemas.map((s) => [...(s.requi
 test('the recorded answers and the scheme vectors carry every field the published OpenAPI document requires', () => {
   assert.deepEqual(missing(answer(402), pay.http[0].body), []);
   assert.deepEqual(missing(answer(200), pay.http[1].body), []);
-  for (const v of vectors.vectors) assert.deepEqual(missing(scheme('prepaid-debit'), v.paymentRequirements), [], v.name);
+  for (const v of vectors.vectors) assert.deepEqual(missing(offer('prepaid-debit'), v.paymentRequirements), [], v.name);
 });
 
 test('the published 402 requires every field the SDK reads to pay it, in either scheme', () => {
-  const delegate = scheme('delegate');
+  assert.ok(answer(402).properties!.error.required!.includes('message'));
+  const delegate = offer('delegate');
   assert.deepEqual(sortedRequired(delegate, delegate.properties!.instruction), [
     ['chain_id', 'delegate', 'instruction', 'payer', 'scheme'],
     ['args', 'contract', 'function', 'minimum_value_wei'],
   ]);
-  const x402 = scheme('prepaid-debit');
-  assert.deepEqual(sortedRequired(x402, x402.properties!.extra), [
+  const prepaid = offer('prepaid-debit');
+  assert.deepEqual(sortedRequired(prepaid, prepaid.properties!.extra), [
     ['amount', 'asset', 'extra', 'maxTimeoutSeconds', 'network', 'payTo', 'scheme'],
     ['facilitatorAddress', 'name', 'version'],
   ]);

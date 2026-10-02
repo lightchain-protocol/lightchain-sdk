@@ -23,4 +23,5 @@ const { openapi, info, paths } = (await app.inject({ method: 'GET', url: '/docs/
 await app.close();
 
 const path = '/v1/chat/completions';
-writeFileSync('test/fixtures/openapi.json', `${JSON.stringify({ openapi, info, paths: { [path]: paths[path] } }, null, 2)}\n`);
+const fixture = { openapi, info, paths: { [path]: paths[path] } };
+writeFileSync('test/fixtures/openapi.json', `${JSON.stringify(fixture, null, 2)}\n`);
