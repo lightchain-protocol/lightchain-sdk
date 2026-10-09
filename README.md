@@ -138,3 +138,5 @@ WALLET_PRIVATE_KEY=0x... npm run acceptance:pool   # streaming, and two interlea
 ```
 
 The fixtures in `test/fixtures` were recorded from a local devnet (`make devnet-full`, chain 48221) with Foundry's publicly known test account 7. The x402 tests sign the scheme's published test vectors (`test/fixtures/x402-vectors.json`, a copy of the orchestrator's `scripts/x402-vectors/vectors.json`) byte for byte, with Foundry's test account 3. Never use either key on a real network.
+
+CI (`.github/workflows/ci.yml`) typechecks, builds and tests every pull request and every push to `main`. `acceptance.yml` runs `acceptance:pool` against testnet every night at 03:17 UTC, and on demand from the Actions tab. It pays from the wallet in the `TESTNET_WALLET_PRIVATE_KEY` secret, which needs testnet LCAI. Each run's log is kept as an artifact.
