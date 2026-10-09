@@ -1,9 +1,9 @@
-# @lightchain/sdk
+# @lightchainai/sdk
 
 The LightChain AI Developer API for TypeScript: it runs an API key against the right network, and, given a wallet, pays a `402` by itself. Completions go through the OpenAI SDK: the Developer API is OpenAI-compatible.
 
 ```sh
-npm install @lightchain/sdk openai
+npm install @lightchainai/sdk openai
 ```
 
 ## 1. Create a key in the chat: Developer → API keys
@@ -14,7 +14,7 @@ The chat's Developer page (`/developer`) creates your API keys and lists them. A
 
 ```ts
 import OpenAI from "openai";
-import { Lightchain } from "@lightchain/sdk";
+import { Lightchain } from "@lightchainai/sdk";
 
 const lc = new Lightchain({ network: "testnet", apiKey: process.env.LIGHTCHAIN_API_KEY! });
 const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: lc.apiKey, fetch: lc.fetch });
@@ -61,7 +61,7 @@ With `payment: "x402"`, the SDK pays each call from the account's own prepaid ba
 ```ts
 import OpenAI from "openai";
 import { privateKeyToAccount } from "viem/accounts";
-import { Lightchain, type LightchainJob } from "@lightchain/sdk";
+import { Lightchain, type LightchainJob } from "@lightchainai/sdk";
 
 const lc = new Lightchain({
   network: "testnet",

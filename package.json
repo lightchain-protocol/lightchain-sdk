@@ -1,8 +1,12 @@
 {
-  "name": "@lightchain/sdk",
+  "name": "@lightchainai/sdk",
   "version": "0.1.0-alpha.0",
   "description": "The LightChain AI Developer API with an API key, through the OpenAI SDK; a wallet can top up on a 402 by itself, or pay per request with x402.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lightchain-protocol/lightchain-sdk.git"
+  },
   "type": "module",
   "exports": {
     ".": {
