@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import vectors from '../../scripts/x402-vectors/vectors.json' with { type: 'json' };
+import vectors from './fixtures/x402-vectors.json' with { type: 'json' };
 // The consumer API's published document; `npm run openapi` writes it from ../consumer-api.
 import spec from './fixtures/openapi.json' with { type: 'json' };
 import pay from './fixtures/pay-402.json' with { type: 'json' };

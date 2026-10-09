@@ -130,10 +130,11 @@ npm install
 npm test            # unit tests against recorded devnet answers (Node >= 22.18)
 npm run typecheck
 npm run build       # dist/
-npm run abi         # regenerate src/abi.ts from ../pkg/chain/abis (after `make bindings`)
-npm run openapi     # regenerate test/fixtures/openapi.json from ../consumer-api's source (its dependencies installed)
+npm run abi         # regenerate src/abi.ts from pkg/chain/abis (inside the orchestrator's sdk/, after `make bindings`)
+npm run openapi     # regenerate test/fixtures/openapi.json from consumer-api's source (inside the orchestrator's sdk/)
 WALLET_PRIVATE_KEY=0x... npm run acceptance   # a fresh wallet: the key alone gets its 402, then account pays it; see scripts/acceptance.ts
 WALLET_PRIVATE_KEY=0x... LIGHTCHAIN_MODEL=gemma4:e2b npm run acceptance:x402   # keyless x402 mode; see scripts/acceptance-x402.ts
+WALLET_PRIVATE_KEY=0x... npm run acceptance:pool   # streaming, and two interleaved conversations in one pooled session
 ```
 
-The fixtures in `test/fixtures` were recorded from a local devnet (`make devnet-full`, chain 48221) with Foundry's publicly known test account 7. The x402 tests sign the scheme's published test vectors (`../scripts/x402-vectors/vectors.json`) byte for byte, with Foundry's test account 3. Never use either key on a real network.
+The fixtures in `test/fixtures` were recorded from a local devnet (`make devnet-full`, chain 48221) with Foundry's publicly known test account 7. The x402 tests sign the scheme's published test vectors (`test/fixtures/x402-vectors.json`, a copy of the orchestrator's `scripts/x402-vectors/vectors.json`) byte for byte, with Foundry's test account 3. Never use either key on a real network.

@@ -3,7 +3,7 @@ import { type TestContext, test } from 'node:test';
 import { type Hex, hexToBytes } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { Lightchain, type LightchainOptions, networks, type Payment } from '../src/index.ts';
-import vectors from '../../scripts/x402-vectors/vectors.json' with { type: 'json' };
+import vectors from './fixtures/x402-vectors.json' with { type: 'json' };
 import pay from './fixtures/pay-402.json' with { type: 'json' };
 import { type Exchange, replayHttp, replayRpc } from './replay.ts';
 
