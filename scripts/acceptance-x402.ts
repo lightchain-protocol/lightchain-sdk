@@ -10,7 +10,7 @@
 // LIGHTCHAIN_CHAIN_ID and LIGHTCHAIN_JOB_REGISTRY instead of LIGHTCHAIN_NETWORK.
 // LIGHTCHAIN_MODEL is required: with no key there is no /v1/models to ask.
 // Optional: LIGHTCHAIN_DEPOSIT_WEI (default 0.1 LCAI), LIGHTCHAIN_MAX_PAYMENT_WEI
-// (default 0.01 LCAI), LIGHTCHAIN_PAYER_CONCURRENCY (the server's per-payer
+// (default 0.05 LCAI), LIGHTCHAIN_PAYER_CONCURRENCY (the server's per-payer
 // limit, default 1).
 import assert from 'node:assert/strict';
 import OpenAI from 'openai';
@@ -35,7 +35,7 @@ const lc = new Lightchain({
   network,
   account: privateKeyToAccount(env.WALLET_PRIVATE_KEY as Hex),
   payment: 'x402',
-  maxPaymentWei: BigInt(env.LIGHTCHAIN_MAX_PAYMENT_WEI ?? 10n ** 16n),
+  maxPaymentWei: BigInt(env.LIGHTCHAIN_MAX_PAYMENT_WEI ?? 5n * 10n ** 16n),
   keyless: true,
   onPayment: (p) => {
     payments.push(p);
