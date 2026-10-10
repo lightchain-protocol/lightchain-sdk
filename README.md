@@ -1,6 +1,6 @@
 # @lightchainai/sdk
 
-The LightChain AI Developer API for TypeScript: it runs an API key against the right network, and, given a wallet, pays a `402` by itself. Completions go through the OpenAI SDK: the Developer API is OpenAI-compatible.
+The LightChain AI Developer API for TypeScript: it runs an API key against the right network, and, given a wallet, pays for calls by itself: it tops up the prepaid balance on a `402` (the default mode), or signs each call's x402 payment (x402 mode). Completions go through the OpenAI SDK: the Developer API is OpenAI-compatible.
 
 ```sh
 npm install @lightchainai/sdk openai
@@ -34,7 +34,7 @@ Until the wallet behind the key has paid, and whenever its balance or allowance 
 
 ## Automatic top-ups
 
-To run a bot unattended, give it the wallet behind the key as `account` (a viem local account). On a `402` for an empty balance or allowance, `lc.fetch` then sends the `depositAndAuthorize` the 402 names from that wallet, and sends the request again.
+To run a bot unattended, give it the wallet behind the key as `account` (a viem local account). On a `402` for an empty balance or allowance, `lc.fetch` then sends the `depositAndAuthorize` the 402 names from that wallet, and sends the request again. This is the default mode (`payment: "delegate"`): x402 mode never deposits by itself (see below).
 
 ```ts
 import { privateKeyToAccount } from "viem/accounts";
@@ -56,7 +56,7 @@ Each 402 pays its own deposit, one transaction after the other. Calls made toget
 
 ## x402: pay per request
 
-With `payment: "x402"`, the SDK pays each call from the account's own prepaid balance with a signed debit authorization ([x402](https://x402.org), LightChain's `prepaid-debit` scheme). The account authorizes no delegate and sends no transaction per call; it deposits once. It needs `account`, and either an API key or `keyless: true`.
+With `payment: "x402"`, the SDK pays each call from the account's own prepaid balance with a signed debit authorization ([x402](https://x402.org), LightChain's `prepaid-debit` scheme). The account authorizes no delegate and sends no transaction per call. The SDK never deposits in this mode: fund the balance yourself with `lc.deposit(value)`. When it can't cover a call, the call fails with `402` `insufficient_funds`: deposit again and retry. It needs `account`, and either an API key or `keyless: true`.
 
 ```ts
 import OpenAI from "openai";
@@ -72,7 +72,7 @@ const lc = new Lightchain({
   onPayment: (p) => console.log(`settled in ${p.hash}, ${p.amount} wei debited`),
 });
 
-await lc.deposit(10n ** 18n); // once: fund the prepaid balance; it authorizes nobody
+await lc.deposit(10n ** 18n); // fund the prepaid balance, and again when it runs out; it authorizes nobody
 
 const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: lc.apiKey, fetch: lc.fetch });
 const completion = await openai.chat.completions.create({
@@ -95,8 +95,8 @@ Before signing, the SDK checks the requirements against the network it was given
 
 | Mode | `apiKey` | `account` |
 | --- | --- | --- |
-| default (`payment: "delegate"`) | required | optional: with it, `fetch` pays a 402 (`depositWei`, `onDeposit`) |
-| `payment: "x402"` | required, unless `keyless: true` | required: it signs each payment (`maxPaymentWei`, required, `onPayment`) |
+| default (`payment: "delegate"`) | required | optional: with it, `fetch` tops up the balance on a 402 (`depositWei`, `onDeposit`) |
+| `payment: "x402"` | required, unless `keyless: true` | required: it signs each payment and never deposits (`maxPaymentWei`, required, `onPayment`) |
 
 The constructor throws on any other combination, and on an option the mode would ignore.
 
