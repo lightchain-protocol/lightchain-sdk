@@ -150,7 +150,7 @@ for (const [what, answer, reason, depositWei] of refusals) {
   });
 }
 
-test('deposits into the prepaid balance alone, authorizing no delegate: what x402 pays from', async () => {
+test('deposits into the prepaid balance alone, authorizing no delegate: what per-call payments pay from', async () => {
   const rpc = replayRpc(pay.rpc);
   const lc = new Lightchain({ network, apiKey: devnet.apiKey, account, transport: rpc.transport });
 

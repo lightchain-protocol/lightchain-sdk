@@ -42,12 +42,12 @@ function signAs(t: TestContext, v: Vector) {
   });
 }
 
-const x402 = (fetch: typeof globalThis.fetch, transport = replayRpc([]).transport) => ({
+const perCall = (fetch: typeof globalThis.fetch, transport = replayRpc([]).transport) => ({
   account: privateKeyToAccount(payerKey),
   apiKey: 'lcai_test',
   fetch,
   transport,
-  payment: 'x402' as const,
+  payment: 'per-call' as const,
   maxPaymentWei: 10n ** 18n,
 });
 const networkOf = (v: Vector) => (v.chain.chainId === networks.mainnet.chainId ? 'mainnet' : 'testnet');
@@ -74,7 +74,7 @@ for (const name of signedBySdk) {
     signAs(t, v);
     const http = replayHttp([paymentRequired(v.paymentRequirements), completed]);
     const rpc = replayRpc([]);
-    const lc = new Lightchain({ network: networkOf(v), ...x402(http.fetch, rpc.transport) });
+    const lc = new Lightchain({ network: networkOf(v), ...perCall(http.fetch, rpc.transport) });
 
     const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
 
@@ -96,7 +96,7 @@ for (const [name, reason] of refusedVectors) {
   test(`does not sign the requirements of the ${name} vector, and says why`, async () => {
     const v = vector(name);
     const http = replayHttp([paymentRequired(v.paymentRequirements)]);
-    const lc = new Lightchain({ network: 'testnet', ...x402(http.fetch) });
+    const lc = new Lightchain({ network: 'testnet', ...perCall(http.fetch) });
 
     const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
 
@@ -114,7 +114,7 @@ const fee = BigInt(testnetRequirements.amount);
 /** The payment an x402-mode client with `maxPaymentWei` sends for requirements, or its 402 if it sends none. */
 async function payWith(maxPaymentWei: bigint, requirements: object) {
   const http = replayHttp([paymentRequired(requirements), completed]);
-  const lc = new Lightchain({ network: 'testnet', ...x402(http.fetch), maxPaymentWei });
+  const lc = new Lightchain({ network: 'testnet', ...perCall(http.fetch), maxPaymentWei });
   const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
   if (response.status === 402) return { refused: ((await response.json()) as { error: { message: string } }).error.message };
   return { payment: paymentOf(http.sent[1]) };
@@ -170,7 +170,7 @@ test('tells onPayment of the settlement the answer reports in PAYMENT-RESPONSE',
   const settled = { ...completed, headers: { 'payment-response': Buffer.from(JSON.stringify(settlement)).toString('base64') } };
   const http = replayHttp([paymentRequired(testnetRequirements), settled]);
   const payments: unknown[] = [];
-  const lc = new Lightchain({ network: 'testnet', ...x402(http.fetch), onPayment: (p: Payment) => payments.push(p) });
+  const lc = new Lightchain({ network: 'testnet', ...perCall(http.fetch), onPayment: (p: Payment) => payments.push(p) });
 
   await lc.fetch(`${lc.baseURL}/chat/completions`, request);
 
@@ -181,7 +181,7 @@ test('hands back a refused payment as the server answered it, telling onPayment 
   const refusal = { ...paymentRequired(testnetRequirements), headers: { 'payment-response': Buffer.from(JSON.stringify({ success: false, errorReason: 'insufficient_funds', transaction: '', network: 'eip155:8200' })).toString('base64') } };
   const http = replayHttp([paymentRequired(testnetRequirements), refusal]);
   const payments: unknown[] = [];
-  const lc = new Lightchain({ network: 'testnet', ...x402(http.fetch), onPayment: (p: Payment) => payments.push(p) });
+  const lc = new Lightchain({ network: 'testnet', ...perCall(http.fetch), onPayment: (p: Payment) => payments.push(p) });
 
   const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
 
@@ -191,39 +191,39 @@ test('hands back a refused payment as the server answered it, telling onPayment 
   http.done();
 });
 
-test('in x402 mode, does not deposit on a 402 that only offers the delegate way, and says why', async () => {
+test('in per-call mode, does not deposit on a 402 that only offers the delegate way, and says why', async () => {
   const http = replayHttp([delegateRequired]);
-  const lc = new Lightchain({ network: 'testnet', ...x402(http.fetch) });
+  const lc = new Lightchain({ network: 'testnet', ...perCall(http.fetch) });
 
   const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
 
   assert.equal(response.status, 402);
-  assert.match(((await response.json()) as { error: { message: string } }).error.message, /^Not paid by the SDK: payment is "x402", and the 402 offers no prepaid-debit payment/);
+  assert.match(((await response.json()) as { error: { message: string } }).error.message, /^Not paid by the SDK: payment is "per-call", and the 402 offers no prepaid-debit payment/);
   http.done();
 });
 
-test('asks for maxPaymentWei in x402 mode, with no default', () => {
-  const options = { network: 'testnet', account: privateKeyToAccount(payerKey), apiKey: 'lcai_test', payment: 'x402' } as const;
+test('asks for maxPaymentWei in per-call mode, with no default', () => {
+  const options = { network: 'testnet', account: privateKeyToAccount(payerKey), apiKey: 'lcai_test', payment: 'per-call' } as const;
   assert.throws(() => new Lightchain(options as unknown as LightchainOptions), /maxPaymentWei/);
   assert.throws(() => new Lightchain({ ...options, maxPaymentWei: 0n }), /maxPaymentWei/);
 });
 
-test('refuses a payment mode it does not know', () => {
-  const options = { network: 'testnet', account: privateKeyToAccount(payerKey), apiKey: 'lcai_test', payment: 'X402' };
-  assert.throws(() => new Lightchain(options as unknown as LightchainOptions), /"delegate" or "x402"/);
+test('refuses a payment mode it does not know, the former name "x402" included', () => {
+  const options = { network: 'testnet', account: privateKeyToAccount(payerKey), apiKey: 'lcai_test', payment: 'x402' };
+  assert.throws(() => new Lightchain(options as unknown as LightchainOptions), /"delegate" or "per-call"/);
 });
 
 test('refuses the options of one mode in the other, so a cap is never silently ignored', () => {
   const base = { network: 'testnet', account: privateKeyToAccount(payerKey), apiKey: 'lcai_test' } as const;
-  assert.throws(() => new Lightchain({ ...base, maxPaymentWei: 1n } as unknown as LightchainOptions), /payment "x402"/);
-  assert.throws(() => new Lightchain({ ...base, onPayment: () => {} } as unknown as LightchainOptions), /payment "x402"/);
-  const x402Mode = { ...base, payment: 'x402', maxPaymentWei: 1n } as const;
-  assert.throws(() => new Lightchain({ ...x402Mode, depositWei: 1n } as unknown as LightchainOptions), /payment "delegate"/);
+  assert.throws(() => new Lightchain({ ...base, maxPaymentWei: 1n } as unknown as LightchainOptions), /payment "per-call"/);
+  assert.throws(() => new Lightchain({ ...base, onPayment: () => {} } as unknown as LightchainOptions), /payment "per-call"/);
+  const perCallMode = { ...base, payment: 'per-call', maxPaymentWei: 1n } as const;
+  assert.throws(() => new Lightchain({ ...perCallMode, depositWei: 1n } as unknown as LightchainOptions), /payment "delegate"/);
 });
 
 test('carries the payment on a Request sent again, keeping its own headers', async () => {
   const http = replayHttp([paymentRequired(testnetRequirements), completed]);
-  const lc = new Lightchain({ network: 'testnet', ...x402(http.fetch) });
+  const lc = new Lightchain({ network: 'testnet', ...perCall(http.fetch) });
 
   const response = await lc.fetch(new Request(`${lc.baseURL}/chat/completions`, request));
 
@@ -239,23 +239,26 @@ function keylessPaymentRequired(requirements: object): Exchange {
   return { ...delegateRequired, body: { error: { ...error, code: 'payment_required', accepts: [requirements] } } };
 }
 
-test('with keyless, sends no Authorization header, on the call or on its paid retry', async () => {
+for (const apiKey of [undefined, '']) {
+  test(`with apiKey ${JSON.stringify(apiKey)}, calls keyless: no Authorization header, on the call or on its paid retry`, async () => {
+    const http = replayHttp([keylessPaymentRequired(testnetRequirements), completed]);
+    const lc = new Lightchain({ network: 'testnet', ...perCall(http.fetch), apiKey });
+
+    // As the OpenAI SDK sends it: with some key in Authorization, which fetch drops.
+    const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
+
+    assert.equal(response.status, 200);
+    assert.equal(lc.apiKey, 'keyless', 'a placeholder for the OpenAI SDK, which insists on a key');
+    assert.deepEqual(http.sent.map((s) => s.headers.get('authorization')), [null, null]);
+    assert.equal(http.sent[0].headers.get('content-type'), 'application/json', 'the other headers go out as given');
+    assert.equal(paymentOf(http.sent[1]).accepted.asset, testnetRequirements.asset);
+    http.done();
+  });
+}
+
+test('with no apiKey, sends no Authorization header from a Request either', async () => {
   const http = replayHttp([keylessPaymentRequired(testnetRequirements), completed]);
-  const lc = new Lightchain({ network: 'testnet', ...x402(http.fetch), apiKey: undefined, keyless: true });
-
-  // As the OpenAI SDK sends it: with the placeholder key it insists on.
-  const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(http.sent.map((s) => s.headers.get('authorization')), [null, null]);
-  assert.equal(http.sent[0].headers.get('content-type'), 'application/json', 'the other headers go out as given');
-  assert.equal(paymentOf(http.sent[1]).accepted.asset, testnetRequirements.asset);
-  http.done();
-});
-
-test('with keyless, sends no Authorization header from a Request either', async () => {
-  const http = replayHttp([keylessPaymentRequired(testnetRequirements), completed]);
-  const lc = new Lightchain({ network: 'testnet', ...x402(http.fetch), apiKey: undefined, keyless: true });
+  const lc = new Lightchain({ network: 'testnet', ...perCall(http.fetch), apiKey: undefined });
 
   const response = await lc.fetch(new Request(`${lc.baseURL}/chat/completions`, request));
 
@@ -264,16 +267,11 @@ test('with keyless, sends no Authorization header from a Request either', async 
   assert.deepEqual(http.sent[1].body, http.sent[0].body);
 });
 
-test('without keyless, the API key goes out on the call and on its paid retry', async () => {
+test('with an apiKey, the key goes out on the call and on its paid retry', async () => {
   const http = replayHttp([paymentRequired(testnetRequirements), completed]);
-  const lc = new Lightchain({ network: 'testnet', ...x402(http.fetch) });
+  const lc = new Lightchain({ network: 'testnet', ...perCall(http.fetch) });
 
   await lc.fetch(`${lc.baseURL}/chat/completions`, request);
 
   assert.deepEqual(http.sent.map((s) => s.headers.get('authorization')), ['Bearer lcai_test', 'Bearer lcai_test']);
-});
-
-test('refuses keyless outside x402 mode: the delegate way needs the key', () => {
-  const base = { network: 'testnet', account: privateKeyToAccount(payerKey), apiKey: 'lcai_test' } as const;
-  assert.throws(() => new Lightchain({ ...base, keyless: true } as unknown as LightchainOptions), /payment "x402"/);
 });

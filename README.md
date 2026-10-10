@@ -1,6 +1,6 @@
 # @lightchainai/sdk
 
-The LightChain AI Developer API for TypeScript: it runs an API key against the right network, and, given a wallet, pays for calls by itself: it tops up the prepaid balance on a `402` (the default mode), or signs each call's x402 payment (x402 mode). Completions go through the OpenAI SDK: the Developer API is OpenAI-compatible.
+The LightChain AI Developer API for TypeScript: it runs an API key against the right network, and, given a wallet, pays for calls by itself: it tops up the prepaid balance on a `402` (the default mode), or signs each call's own payment (per-call mode, experimental). Completions go through the OpenAI SDK: the Developer API is OpenAI-compatible.
 
 ```sh
 npm install @lightchainai/sdk openai
@@ -34,7 +34,7 @@ Until the wallet behind the key has paid, and whenever its balance or allowance 
 
 ## Automatic top-ups
 
-To run a bot unattended, give it the wallet behind the key as `account` (a viem local account). On a `402` for an empty balance or allowance, `lc.fetch` then sends the `depositAndAuthorize` the 402 names from that wallet, and sends the request again. This is the default mode (`payment: "delegate"`): x402 mode never deposits by itself (see below).
+To run a bot unattended, give it the wallet behind the key as `account` (a viem local account). On a `402` for an empty balance or allowance, `lc.fetch` then sends the `depositAndAuthorize` the 402 names from that wallet, and sends the request again. This is the default mode (`payment: "delegate"`): per-call mode never deposits by itself (see below).
 
 ```ts
 import { privateKeyToAccount } from "viem/accounts";
@@ -54,9 +54,11 @@ The delegate and the fee come from the API: the SDK trusts the API it talks to f
 
 Each 402 pays its own deposit, one transaction after the other. Calls made together before the first deposit lands each deposit `depositWei`; what one of them did not need stays in the prepaid balance, and `withdrawBalance` on the JobRegistry takes it back.
 
-## x402: pay per request
+## Pay per call (experimental)
 
-With `payment: "x402"`, the SDK pays each call from the account's own prepaid balance with a signed debit authorization ([x402](https://x402.org), LightChain's `prepaid-debit` scheme). The account authorizes no delegate and sends no transaction per call. The SDK never deposits in this mode: fund the balance yourself with `lc.deposit(value)`. When it can't cover a call, the call fails with `402` `insufficient_funds`: deposit again and retry. It needs `account`, and either an API key or `keyless: true`.
+> **Experimental.** This mode, its options and LightChain's `prepaid-debit` scheme may change in any release. It uses the [x402](https://x402.org) v2 HTTP headers, but LightChain's own payment scheme: standard x402 clients can't pay it. Use this SDK.
+
+With `payment: "per-call"`, the SDK pays each call from the account's own prepaid balance with a signed debit authorization. The account authorizes no delegate and sends no transaction per call. The SDK never deposits in this mode: fund the balance yourself with `lc.deposit(value)`. When it can't cover a call, the call fails with `402` `insufficient_funds`: deposit again and retry. It needs `account`. `apiKey` is optional: without one, the call goes out with no key at all.
 
 ```ts
 import OpenAI from "openai";
@@ -66,9 +68,9 @@ import { Lightchain, type LightchainJob } from "@lightchainai/sdk";
 const lc = new Lightchain({
   network: "testnet",
   account: privateKeyToAccount(process.env.WALLET_PRIVATE_KEY as `0x${string}`),
-  payment: "x402",
+  payment: "per-call",
   maxPaymentWei: 5n * 10n ** 16n, // required: the most one call may pay (0.05 LCAI; testnet charges 0.02 a job)
-  keyless: true, // or apiKey: process.env.LIGHTCHAIN_API_KEY
+  // apiKey: process.env.LIGHTCHAIN_API_KEY, // optional: without it, no key at all
   onPayment: (p) => console.log(`settled in ${p.hash}, ${p.amount} wei debited`),
 });
 
@@ -84,19 +86,19 @@ console.log((completion as unknown as { lightchain: LightchainJob }).lightchain.
 
 On a `402` whose `accepts` lists the `prepaid-debit` requirements, `lc.fetch` signs an EIP-712 debit authorization with the account: capped at the requirements' `amount` (one job's fee), valid until now + `maxTimeoutSeconds`, with a random 32-byte nonce. It sends the request again with the authorization in the `PAYMENT-SIGNATURE` header. The API settles it before it answers: one JobRegistry transaction submits the job and debits the fee from the account's balance. The completion's `lightchain.tx_hash` is that settlement transaction, and `onPayment` gets it with the fee debited, from the `PAYMENT-RESPONSE` header.
 
-Before signing, the SDK checks the requirements against the network it was given: `network` is `eip155:<chainId>`, `asset` is the network's JobRegistry, the signing domain is `LightChain JobRegistry` version `1`, `payTo` and `facilitatorAddress` are addresses, `maxTimeoutSeconds` is between 1 and 600, and `amount` is at most `maxPaymentWei`. Requirements that fail a check are not signed: the 402 comes back with the reason at the start of `error.message`. So does a 402 that offers only the delegate way (an API that takes no x402 payments).
+Before signing, the SDK checks the requirements against the network it was given: `network` is `eip155:<chainId>`, `asset` is the network's JobRegistry, the signing domain is `LightChain JobRegistry` version `1`, `payTo` and `facilitatorAddress` are addresses, `maxTimeoutSeconds` is between 1 and 600, and `amount` is at most `maxPaymentWei`. Requirements that fail a check are not signed: the 402 comes back with the reason at the start of `error.message`. So does a 402 that offers only the delegate way (an API that takes no per-call payments).
 
-- **Keyless, no key at all.** `lc.fetch` drops the `Authorization` header, and `lc.apiKey` is a placeholder for the OpenAI SDK, which insists on one. The API answers every call `402` with the x402 requirements alone, the SDK pays it, and the account is held, as payer, to the API's per-payer limits instead of a key's: by default 30 requests a minute and one call in flight.
-- **With a key,** `lc.fetch` sends it on every call: it authenticates the call and holds it to the API's limits for that key. A key whose wallet has a delegate gets no 402, so x402 pays only the calls the API asks it to pay.
-- **The modes do not mix.** x402 mode never sends `depositAndAuthorize`, and the default mode never signs an x402 payment.
-- **A refused payment comes back as the API answered it** (for example `402` `insufficient_funds`, or `invalid_prepaid_debit_payload_expired`), with the x402 reason as `error.code`. The SDK does not pay it again. The Developer API's Payment page lists the codes and what to do about each.
+- **No `apiKey`, no key at all.** `lc.fetch` drops the `Authorization` header, and `lc.apiKey` is a placeholder for the OpenAI SDK, which insists on one. The API answers every call `402` with the per-call requirements alone, the SDK pays it, and the account is held, as payer, to the API's per-payer limits instead of a key's: by default 30 requests a minute and one call in flight.
+- **With a key,** `lc.fetch` sends it on every call: it authenticates the call and holds it to the API's limits for that key. A key whose wallet has a delegate gets no 402, so the SDK pays only the calls the API asks it to pay.
+- **The modes do not mix.** Per-call mode never sends `depositAndAuthorize`, and the default mode never signs a per-call payment.
+- **A refused payment comes back as the API answered it** (for example `402` `insufficient_funds`, or `invalid_prepaid_debit_payload_expired`), with the reason as `error.code`. The SDK does not pay it again. The Developer API's Payment page lists the codes and what to do about each.
 
 ## Members
 
 | Mode | `apiKey` | `account` |
 | --- | --- | --- |
 | default (`payment: "delegate"`) | required | optional: with it, `fetch` tops up the balance on a 402 (`depositWei`, `onDeposit`) |
-| `payment: "x402"` | required, unless `keyless: true` | required: it signs each payment and never deposits (`maxPaymentWei`, required, `onPayment`) |
+| `payment: "per-call"` (experimental) | optional: without it, no key is sent | required: it signs each payment and never deposits (`maxPaymentWei`, required, `onPayment`) |
 
 The constructor throws on any other combination, and on an option the mode would ignore.
 
@@ -106,7 +108,7 @@ The constructor throws on any other combination, and on an option the mode would
 | `fetch` | `fetch` that sends `Authorization: Bearer <apiKey>` to the network's API (and to no other host) and, given an `account`, pays a `402` the way `payment` says and sends the request again, once. Give it to the OpenAI SDK. |
 | `baseURL`, `apiKey` | The OpenAI SDK's `baseURL` (the network's `/v1`) and `apiKey`. |
 | `getBalance(delegate?)` | The account's prepaid balance; with `delegate`, also whether it is authorized and its remaining allowance. Needs `account`. |
-| `deposit(value)` | Adds `value` to the account's prepaid balance and authorizes nobody: what x402 pays from. Needs `account`. |
+| `deposit(value)` | Adds `value` to the account's prepaid balance and authorizes nobody: what per-call payments pay from. Needs `account`. |
 | `depositAndAuthorize(delegate, value)` | Adds `value` to the balance, authorizes `delegate` (the API's signer) and raises its allowance by `value`. Needs `account`. |
 | `address`, `network` | The account's address, if any, and the endpoints in use. |
 
@@ -133,11 +135,11 @@ npm run build       # dist/
 npm run abi -- IJobRegistry.json   # regenerate src/abi.ts from the JobRegistry's ABI, after the contracts change
 npm run openapi     # refresh test/fixtures/openapi.json from the API testnet serves
 WALLET_PRIVATE_KEY=0x... npm run acceptance   # a fresh wallet: the key alone gets its 402, then account pays it; see scripts/acceptance.ts
-WALLET_PRIVATE_KEY=0x... LIGHTCHAIN_MODEL=gemma4:e2b npm run acceptance:x402   # keyless x402 mode; see scripts/acceptance-x402.ts
-FUNDER_PRIVATE_KEY=0x... LIGHTCHAIN_MODEL=gemma4:e2b npm run acceptance:x402:fresh   # the same, from a fresh wallet FUNDER_PRIVATE_KEY funds
+WALLET_PRIVATE_KEY=0x... LIGHTCHAIN_MODEL=gemma4:e2b npm run acceptance:per-call   # per-call mode with no key; see scripts/acceptance-per-call.ts
+FUNDER_PRIVATE_KEY=0x... LIGHTCHAIN_MODEL=gemma4:e2b npm run acceptance:per-call:fresh   # the same, from a fresh wallet FUNDER_PRIVATE_KEY funds
 WALLET_PRIVATE_KEY=0x... npm run acceptance:pool   # streaming, and two interleaved conversations in one pooled session
 ```
 
-The fixtures in `test/fixtures` were recorded from a local devnet with Foundry's publicly known test account 7. The x402 tests sign the scheme's test vectors (`test/fixtures/x402-vectors.json`) byte for byte, with Foundry's test account 3. Never use either key on a real network.
+The fixtures in `test/fixtures` were recorded from a local devnet with Foundry's publicly known test account 7. The per-call tests sign the scheme's test vectors (`test/fixtures/x402-vectors.json`) byte for byte, with Foundry's test account 3. Never use either key on a real network.
 
-CI (`.github/workflows/ci.yml`) typechecks, builds and tests every pull request and every push to `main`. `acceptance.yml` runs `acceptance:pool`, then `acceptance:x402:fresh`, against testnet every night at 03:17 UTC, and on demand from the Actions tab. It pays from the wallet in the `TESTNET_WALLET_PRIVATE_KEY` secret, which needs testnet LCAI. `acceptance:x402:fresh` (`scripts/fresh-wallet.ts`) runs `acceptance:x402` with a wallet made for that run, which the secret's wallet funds and which sends what it has left back: `acceptance:x402` needs a wallet that never authorized a delegate. Each run's log is kept as an artifact.
+CI (`.github/workflows/ci.yml`) typechecks, builds and tests every pull request and every push to `main`. `acceptance.yml` runs `acceptance:pool`, then `acceptance:per-call:fresh`, against testnet every night at 03:17 UTC, and on demand from the Actions tab. It pays from the wallet in the `TESTNET_WALLET_PRIVATE_KEY` secret, which needs testnet LCAI. `acceptance:per-call:fresh` (`scripts/fresh-wallet.ts`) runs `acceptance:per-call` with a wallet made for that run, which the secret's wallet funds and which sends what it has left back: `acceptance:per-call` needs a wallet that never authorized a delegate. Each run's log is kept as an artifact.

@@ -24,7 +24,7 @@ export type LightchainOptions = {
   fetch?: typeof fetch;
   /** The chain's JSON-RPC transport; HTTP to the network's rpcUrl by default. */
   transport?: Transport;
-} & (DelegatePayment | X402Payment);
+} & (DelegatePayment | PerCallPayment);
 
 /**
  * The default. With an account, `fetch` pays a 402 by authorizing the API's
@@ -47,40 +47,38 @@ type DelegatePayment = {
   onDeposit?: (deposit: Deposit) => void;
   maxPaymentWei?: never;
   onPayment?: never;
-  keyless?: never;
 };
 
 /**
- * `fetch` pays each 402 with an x402 payment: a debit authorization the
- * account signs against its own prepaid balance. No transaction, no delegate.
+ * Experimental: may change in any release. `fetch` pays each call on its own:
+ * on a 402 it signs a debit authorization against the account's prepaid
+ * balance (x402 v2 headers, LightChain's `prepaid-debit` scheme). No
+ * transaction, no delegate; the SDK never deposits in this mode.
+ * @experimental
  */
-type X402Payment = {
-  payment: 'x402';
+type PerCallPayment = {
+  payment: 'per-call';
+  /**
+   * Optional. With a key, `fetch` sends it and the API holds the call to the
+   * key's limits. Without one, no request carries an Authorization header: the
+   * payment alone pays, and the API holds the account, as payer, to its
+   * per-payer limits.
+   */
+  apiKey?: string;
   /** A viem local account: it signs every payment. */
   account: LocalAccount;
   /** The most one request may pay, in wei. A 402 asking for more is not paid. */
   maxPaymentWei: bigint;
-  /** Told of every x402 payment the server settled. */
+  /** Told of every payment the server settled. */
   onPayment?: (payment: Payment) => void;
   depositWei?: never;
   onDeposit?: never;
-} & (
-  | { apiKey: string; keyless?: false }
-  | {
-      /**
-       * Call with no API key: `fetch` drops the Authorization header, so the
-       * payment alone pays, and the API holds the account, as payer, to its
-       * per-payer limits.
-       */
-      keyless: true;
-      apiKey?: never;
-    }
-);
+};
 
 /** A depositAndAuthorize the SDK sent on a 402. */
 export type Deposit = { hash: Hex; value: bigint; delegate: Address };
 
-/** An x402 payment the SDK signed on a 402: the settlement transaction, which submitted the job, and the fee it debited. */
+/** A per-call payment the SDK signed on a 402: the settlement transaction, which submitted the job, and the fee it debited. */
 export type Payment = { hash: Hex; amount: bigint };
 
 /** The wallet's prepaid balance; with a delegate, what that delegate may spend of it. */
@@ -170,8 +168,8 @@ export class Lightchain {
   readonly #publicClient: PublicClient;
   readonly #walletClient: WalletClient<Transport, Chain, LocalAccount> | undefined;
   readonly #registry: { address: Address; abi: typeof jobRegistryAbi };
-  /** How a 402 is paid: by a transaction (delegate) or by a signature (x402), never both. */
-  readonly #payment: 'delegate' | 'x402';
+  /** How a 402 is paid: by a transaction (delegate) or by a signature (per-call), never both. */
+  readonly #payment: 'delegate' | 'per-call';
   readonly #depositWei: bigint | undefined;
   readonly #onDeposit: ((deposit: Deposit) => void) | undefined;
   readonly #maxPaymentWei: bigint = 0n;
@@ -190,23 +188,22 @@ export class Lightchain {
     this.#fetch = (input, init) => fetch(input, init);
     this.#registry = { address: this.network.jobRegistry, abi: jobRegistryAbi };
     // Who needs what (the README's table): the default mode needs apiKey, and
-    // pays its 402s only with an account. x402 needs account, to sign, and
-    // apiKey or keyless. An option that would be silently ignored is refused.
+    // pays its 402s only with an account. per-call needs account, to sign, and
+    // calls keyless without apiKey. An option that would be silently ignored is refused.
     const given = (names: string[]) => names.filter((n) => (options as Record<string, unknown>)[n] !== undefined);
-    if (options.payment === 'x402') {
+    if (options.payment === 'per-call') {
       if (given(['depositWei', 'onDeposit']).length) throw new Error('depositWei and onDeposit belong to payment "delegate".');
-      if (!options.account) throw new Error('payment "x402" needs account: it signs each payment.');
+      if (!options.account) throw new Error('payment "per-call" needs account: it signs each payment.');
       // No default: what a 402 may take is the builder's call.
       if (typeof options.maxPaymentWei !== 'bigint' || options.maxPaymentWei <= 0n) {
-        throw new Error('payment "x402" needs maxPaymentWei: the most one request may pay, in wei.');
+        throw new Error('payment "per-call" needs maxPaymentWei: the most one request may pay, in wei.');
       }
       this.#maxPaymentWei = options.maxPaymentWei;
       this.#onPayment = options.onPayment;
-      this.#keyless = options.keyless === true;
-      if (this.#keyless === (options.apiKey !== undefined)) throw new Error('payment "x402" takes apiKey or keyless: true, one of the two.');
+      this.#keyless = !options.apiKey;
     } else if (options.payment === undefined || options.payment === 'delegate') {
-      if (given(['maxPaymentWei', 'onPayment', 'keyless']).length) {
-        throw new Error('maxPaymentWei, onPayment and keyless belong to payment "x402".');
+      if (given(['maxPaymentWei', 'onPayment']).length) {
+        throw new Error('maxPaymentWei and onPayment belong to payment "per-call".');
       }
       if (!options.account && given(['depositWei', 'onDeposit']).length) {
         throw new Error('depositWei and onDeposit need account: the wallet that deposits on a 402.');
@@ -214,14 +211,14 @@ export class Lightchain {
       this.#depositWei = options.depositWei;
       this.#onDeposit = options.onDeposit;
     } else {
-      throw new Error(`payment is "delegate" or "x402", not ${JSON.stringify(options.payment)}.`);
+      throw new Error(`payment is "delegate" or "per-call", not ${JSON.stringify(options.payment)}.`);
     }
     this.#payment = options.payment ?? 'delegate';
     if (!this.#keyless && (typeof options.apiKey !== 'string' || !options.apiKey)) {
       throw new Error('needs apiKey: a key created in the chat, under Developer, API keys.');
     }
     // The OpenAI SDK insists on some apiKey.
-    this.#apiKey = options.apiKey ?? 'keyless';
+    this.#apiKey = options.apiKey || 'keyless';
     const chain = defineChain({
       id: this.network.chainId,
       name: `LightChain ${this.network.chainId}`,
@@ -235,7 +232,7 @@ export class Lightchain {
   }
 
   /**
-   * The API key, for the OpenAI SDK's `apiKey`; keyless, a placeholder that
+   * The API key, for the OpenAI SDK's `apiKey`; with no key, a placeholder that
    * `fetch` never sends. A getter, so that logging the client prints no key.
    */
   get apiKey(): string {
@@ -253,13 +250,13 @@ export class Lightchain {
    * against this network, and sends the request again. With no account, the
    * 402 comes back as it is.
    *
-   * `x402`: when the 402 lists the `prepaid-debit` requirements, it signs a
+   * `per-call` (experimental): when the 402 lists the `prepaid-debit` requirements, it signs a
    * debit authorization for their amount against the account's prepaid
    * balance, once they check out against this network and maxPaymentWei, and
    * sends the request again with it in a PAYMENT-SIGNATURE header. It never
    * sends a transaction.
    *
-   * With `keyless`, no request carries an Authorization header.
+   * In per-call mode with no apiKey, no request carries an Authorization header.
    *
    * Every other answer comes back as it is, a 402 for a limit the key's owner
    * set included. A 402 it does not pay comes back with the reason prepended
@@ -285,16 +282,16 @@ export class Lightchain {
     // No account, nothing to pay with: the 402 goes to the caller, and a human tops up in the chat.
     if (response.status !== 402 || !account) return response;
     const body = (await response.clone().json().catch(() => null)) as PaymentRequired | null;
-    const x402 = this.#payment === 'x402';
+    const perCall = this.#payment === 'per-call';
     const accepts = body?.error?.accepts ?? [];
-    const accept = accepts.find((a) => a?.scheme === (x402 ? X402_SCHEME : 'delegate'));
-    // In x402 mode a 402 that only offers the delegate way is a missing payment too: say why it stays unpaid.
-    if (!accept && !(x402 && accepts.some((a) => a?.scheme === 'delegate'))) return response;
+    const accept = accepts.find((a) => a?.scheme === (perCall ? X402_SCHEME : 'delegate'));
+    // In per-call mode a 402 that only offers the delegate way is a missing payment too: say why it stays unpaid.
+    if (!accept && !(perCall && accepts.some((a) => a?.scheme === 'delegate'))) return response;
     await response.body?.cancel();
     let payment = '';
     try {
-      if (!accept) throw new Error('payment is "x402", and the 402 offers no prepaid-debit payment.');
-      if (x402) payment = await this.#signPayment(account, accept as X402Accept);
+      if (!accept) throw new Error('payment is "per-call", and the 402 offers no prepaid-debit payment.');
+      if (perCall) payment = await this.#signPayment(account, accept as X402Accept);
       else {
         const deposit = this.#checkDelegateOffer(account, accept as DelegateAccept);
         const hash = await this.depositAndAuthorize(deposit.delegate, deposit.value);
@@ -309,7 +306,7 @@ export class Lightchain {
     }
     // Sent again once. A 402 on that retry (the fee rose meanwhile)
     // comes back to the caller; loop, with a bound, if that shows up.
-    if (!x402) return this.#fetch(again, init);
+    if (!perCall) return this.#fetch(again, init);
     const paidHeaders = new Headers(headers);
     paidHeaders.set('payment-signature', payment);
     const paid = await this.#fetch(again, { ...init, headers: paidHeaders });
@@ -332,7 +329,7 @@ export class Lightchain {
 
   /**
    * Sends JobRegistry.deposit() with `value`: adds it to the wallet's prepaid
-   * balance and authorizes nobody. x402 payments are paid from it. Resolves
+   * balance and authorizes nobody. per-call payments are paid from it. Resolves
    * with the transaction hash once it succeeded on chain.
    */
   deposit(value: bigint): Promise<Hex> {
