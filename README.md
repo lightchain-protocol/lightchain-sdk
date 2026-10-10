@@ -121,7 +121,7 @@ The constructor throws on any other combination, and on an option the mode would
 | `mainnet` | 9200 | `https://chat-api.mainnet.lightchain.ai` (provisional) | `https://rpc.mainnet.lightchain.ai` | `0xfB15F90298e4CcD7106E76fFB5e520315cC42B0b` |
 | `testnet` | 8200 | `https://chat-api.testnet.lightchain.ai` | `https://rpc.testnet.lightchain.ai` | `0x531b3A87c5D785441B9cF55b98169F20FD9056a7` |
 
-The mainnet Developer API hostname is not decided yet. `chat-api.mainnet.lightchain.ai` is the production consumer API's name, but today it serves an older consumer API without the key routes and `/v1`: mainnet calls fail there until the Developer API is deployed behind it.
+The mainnet Developer API is not live yet: mainnet calls fail until it is, and its URL may change.
 
 ## Development
 
@@ -130,14 +130,14 @@ npm install
 npm test            # unit tests against recorded devnet answers (Node >= 22.18)
 npm run typecheck
 npm run build       # dist/
-npm run abi         # regenerate src/abi.ts from pkg/chain/abis (inside the orchestrator's sdk/, after `make bindings`)
-npm run openapi     # regenerate test/fixtures/openapi.json from consumer-api's source (inside the orchestrator's sdk/)
+npm run abi -- IJobRegistry.json   # regenerate src/abi.ts from the JobRegistry's ABI, after the contracts change
+npm run openapi     # refresh test/fixtures/openapi.json from the API testnet serves
 WALLET_PRIVATE_KEY=0x... npm run acceptance   # a fresh wallet: the key alone gets its 402, then account pays it; see scripts/acceptance.ts
 WALLET_PRIVATE_KEY=0x... LIGHTCHAIN_MODEL=gemma4:e2b npm run acceptance:x402   # keyless x402 mode; see scripts/acceptance-x402.ts
 FUNDER_PRIVATE_KEY=0x... LIGHTCHAIN_MODEL=gemma4:e2b npm run acceptance:x402:fresh   # the same, from a fresh wallet FUNDER_PRIVATE_KEY funds
 WALLET_PRIVATE_KEY=0x... npm run acceptance:pool   # streaming, and two interleaved conversations in one pooled session
 ```
 
-The fixtures in `test/fixtures` were recorded from a local devnet (`make devnet-full`, chain 48221) with Foundry's publicly known test account 7. The x402 tests sign the scheme's published test vectors (`test/fixtures/x402-vectors.json`, a copy of the orchestrator's `scripts/x402-vectors/vectors.json`) byte for byte, with Foundry's test account 3. Never use either key on a real network.
+The fixtures in `test/fixtures` were recorded from a local devnet with Foundry's publicly known test account 7. The x402 tests sign the scheme's test vectors (`test/fixtures/x402-vectors.json`) byte for byte, with Foundry's test account 3. Never use either key on a real network.
 
 CI (`.github/workflows/ci.yml`) typechecks, builds and tests every pull request and every push to `main`. `acceptance.yml` runs `acceptance:pool`, then `acceptance:x402:fresh`, against testnet every night at 03:17 UTC, and on demand from the Actions tab. It pays from the wallet in the `TESTNET_WALLET_PRIVATE_KEY` secret, which needs testnet LCAI. `acceptance:x402:fresh` (`scripts/fresh-wallet.ts`) runs `acceptance:x402` with a wallet made for that run, which the secret's wallet funds and which sends what it has left back: `acceptance:x402` needs a wallet that never authorized a delegate. Each run's log is kept as an artifact.
