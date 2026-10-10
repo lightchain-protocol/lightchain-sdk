@@ -27,7 +27,8 @@
     "openapi": "../consumer-api/node_modules/.bin/tsx scripts/openapi.ts",
     "acceptance": "node scripts/acceptance.ts",
     "acceptance:x402": "node scripts/acceptance-x402.ts",
-    "acceptance:pool": "node scripts/acceptance-pool.ts"
+    "acceptance:pool": "node scripts/acceptance-pool.ts",
+    "acceptance:x402:fresh": "node scripts/fresh-wallet.ts acceptance:x402"
   },
   "dependencies": {
     "viem": "^2.47.6"

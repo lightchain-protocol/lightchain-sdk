@@ -67,7 +67,7 @@ const lc = new Lightchain({
   network: "testnet",
   account: privateKeyToAccount(process.env.WALLET_PRIVATE_KEY as `0x${string}`),
   payment: "x402",
-  maxPaymentWei: 10n ** 16n, // required: the most one call may pay (0.01 LCAI)
+  maxPaymentWei: 5n * 10n ** 16n, // required: the most one call may pay (0.05 LCAI; testnet charges 0.02 a job)
   keyless: true, // or apiKey: process.env.LIGHTCHAIN_API_KEY
   onPayment: (p) => console.log(`settled in ${p.hash}, ${p.amount} wei debited`),
 });
@@ -134,9 +134,10 @@ npm run abi         # regenerate src/abi.ts from pkg/chain/abis (inside the orch
 npm run openapi     # regenerate test/fixtures/openapi.json from consumer-api's source (inside the orchestrator's sdk/)
 WALLET_PRIVATE_KEY=0x... npm run acceptance   # a fresh wallet: the key alone gets its 402, then account pays it; see scripts/acceptance.ts
 WALLET_PRIVATE_KEY=0x... LIGHTCHAIN_MODEL=gemma4:e2b npm run acceptance:x402   # keyless x402 mode; see scripts/acceptance-x402.ts
+FUNDER_PRIVATE_KEY=0x... LIGHTCHAIN_MODEL=gemma4:e2b npm run acceptance:x402:fresh   # the same, from a fresh wallet FUNDER_PRIVATE_KEY funds
 WALLET_PRIVATE_KEY=0x... npm run acceptance:pool   # streaming, and two interleaved conversations in one pooled session
 ```
 
 The fixtures in `test/fixtures` were recorded from a local devnet (`make devnet-full`, chain 48221) with Foundry's publicly known test account 7. The x402 tests sign the scheme's published test vectors (`test/fixtures/x402-vectors.json`, a copy of the orchestrator's `scripts/x402-vectors/vectors.json`) byte for byte, with Foundry's test account 3. Never use either key on a real network.
 
-CI (`.github/workflows/ci.yml`) typechecks, builds and tests every pull request and every push to `main`. `acceptance.yml` runs `acceptance:pool` against testnet every night at 03:17 UTC, and on demand from the Actions tab. It pays from the wallet in the `TESTNET_WALLET_PRIVATE_KEY` secret, which needs testnet LCAI. Each run's log is kept as an artifact.
+CI (`.github/workflows/ci.yml`) typechecks, builds and tests every pull request and every push to `main`. `acceptance.yml` runs `acceptance:pool`, then `acceptance:x402:fresh`, against testnet every night at 03:17 UTC, and on demand from the Actions tab. It pays from the wallet in the `TESTNET_WALLET_PRIVATE_KEY` secret, which needs testnet LCAI. `acceptance:x402:fresh` (`scripts/fresh-wallet.ts`) runs `acceptance:x402` with a wallet made for that run, which the secret's wallet funds and which sends what it has left back: `acceptance:x402` needs a wallet that never authorized a delegate. Each run's log is kept as an artifact.
