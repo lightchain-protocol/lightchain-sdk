@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import vectors from './fixtures/x402-vectors.json' with { type: 'json' };
-// The consumer API's published document; `npm run openapi` writes it from ../consumer-api.
+// The Developer API's OpenAPI document, as testnet serves it; `npm run openapi` refreshes it.
 import spec from './fixtures/openapi.json' with { type: 'json' };
 import pay from './fixtures/pay-402.json' with { type: 'json' };
 
@@ -10,7 +10,7 @@ type Schema = { required?: string[]; properties?: Record<string, Schema>; items?
 /**
  * The fields `schema` requires that `value` lacks, as paths. A oneOf takes
  * the branch that misses least.
- * ponytail: required fields only, no types or $ref; the published schemas are
+ * Required fields only, no types or $ref; the published schemas are
  * inline. Use a JSON Schema validator if they grow those.
  */
 function missing(schema: Schema, value: unknown, at = '$'): string[] {

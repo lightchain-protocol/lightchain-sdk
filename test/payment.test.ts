@@ -39,7 +39,7 @@ function withAccepts(accepts: object[]): Exchange {
 const withOffer = (change: (accept: Accept) => object) => withAccepts([change(offer)]);
 
 // The x402 prepaid-debit requirements an API that takes x402 payments lists
-// after the delegate entry, shaped as consumer-api's own tests build them.
+// after the delegate entry.
 const prepaidDebit = {
   scheme: 'prepaid-debit',
   network: `eip155:${network.chainId}`,

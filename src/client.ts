@@ -117,7 +117,7 @@ type X402Accept = {
 /** A /v1 402 body: OpenAI's error, with the ways to pay in `accepts`. */
 type PaymentRequired = { error?: { message?: string; code?: string; accepts?: (DelegateAccept | X402Accept)[] } };
 
-/** LightChain's x402 scheme (docs/x402/lightchain-scheme.md in the orchestrator): its EIP-712 domain and type. */
+/** LightChain's x402 scheme, prepaid-debit: its EIP-712 domain and type. */
 const X402_SCHEME = 'prepaid-debit';
 const DEBIT_DOMAIN = { name: 'LightChain JobRegistry', version: '1' } as const;
 const DEBIT_AUTHORIZATION = {
@@ -307,7 +307,7 @@ export class Lightchain {
       headers.delete('content-length');
       return new Response(JSON.stringify(refused), { status: 402, headers });
     }
-    // ponytail: sent again once. A 402 on that retry (the fee rose meanwhile)
+    // Sent again once. A 402 on that retry (the fee rose meanwhile)
     // comes back to the caller; loop, with a bound, if that shows up.
     if (!x402) return this.#fetch(again, init);
     const paidHeaders = new Headers(headers);

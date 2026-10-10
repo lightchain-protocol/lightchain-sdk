@@ -7,7 +7,7 @@ import vectors from './fixtures/x402-vectors.json' with { type: 'json' };
 import pay from './fixtures/pay-402.json' with { type: 'json' };
 import { type Exchange, replayHttp, replayRpc } from './replay.ts';
 
-// The published vectors of the prepaid-debit scheme (docs/x402/lightchain-scheme.md):
+// The prepaid-debit scheme's test vectors:
 // their payer is Foundry's public test account 3, never a key for a real network.
 type Vector = (typeof vectors.vectors)[number];
 const payerKey = vectors.accounts.find((a) => a.role === 'payer')!.privateKey as Hex;
