@@ -1,10 +1,10 @@
-// End to end in x402 mode with no API key: a wallet that only deposits into
-// its prepaid balance, and never authorizes a delegate or mints a key, gets a
-// 402 listing x402 alone, then a completion through the OpenAI SDK paid by
-// x402, then one refusal of two calls sent at once past the payer's
-// concurrency limit.
+// End to end in per-call mode with no API key: a wallet that only deposits
+// into its prepaid balance, and never authorizes a delegate or mints a key,
+// gets a 402 listing the per-call payment alone, then a completion through the
+// OpenAI SDK paid per call, then one refusal of two calls sent at once past
+// the payer's concurrency limit.
 //
-//   WALLET_PRIVATE_KEY=0x... LIGHTCHAIN_NETWORK=testnet LIGHTCHAIN_MODEL=gemma4:e2b npm run acceptance:x402
+//   WALLET_PRIVATE_KEY=0x... LIGHTCHAIN_NETWORK=testnet LIGHTCHAIN_MODEL=gemma4:e2b npm run acceptance:per-call
 //
 // Another network (a devnet): set LIGHTCHAIN_API_URL, LIGHTCHAIN_RPC_URL,
 // LIGHTCHAIN_CHAIN_ID and LIGHTCHAIN_JOB_REGISTRY instead of LIGHTCHAIN_NETWORK.
@@ -34,16 +34,15 @@ const payments: Payment[] = [];
 const lc = new Lightchain({
   network,
   account: privateKeyToAccount(env.WALLET_PRIVATE_KEY as Hex),
-  payment: 'x402',
+  payment: 'per-call',
   maxPaymentWei: BigInt(env.LIGHTCHAIN_MAX_PAYMENT_WEI ?? 5n * 10n ** 16n),
-  keyless: true,
   onPayment: (p) => {
     payments.push(p);
-    console.log(`402 paid by x402: settlement tx ${p.hash}, ${p.amount} wei debited`);
+    console.log(`402 paid per call: settlement tx ${p.hash}, ${p.amount} wei debited`);
   },
 });
 const chain = createPublicClient({ transport: http(lc.network.rpcUrl) });
-// Keyless, lc.apiKey is a placeholder lc.fetch never sends.
+// With no apiKey, lc.apiKey is a placeholder lc.fetch never sends.
 const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: lc.apiKey, fetch: lc.fetch, maxRetries: 0 });
 const ask = (content: string) => openai.chat.completions.create({ model, messages: [{ role: 'user', content }] });
 console.log(`wallet ${lc.address}, chain ${lc.network.chainId}, API ${lc.baseURL}, model ${model}`);
@@ -61,13 +60,13 @@ type Accept = { scheme: string; payTo: Address; extra: { facilitatorAddress: Add
 const { error } = (await unpaid.json()) as { error: { code: string; accepts: Accept[] } };
 console.log(`${unpaid.status} ${error.code}, accepts ${error.accepts?.map((a) => a.scheme).join(', ')}, PAYMENT-REQUIRED ${unpaid.headers.has('payment-required') ? 'set' : 'missing'}`);
 assert.equal(unpaid.status, 402);
-assert.deepEqual(error.accepts.map((a) => a.scheme), ['prepaid-debit'], 'x402 alone: no wallet to name a delegate for');
+assert.deepEqual(error.accepts.map((a) => a.scheme), ['prepaid-debit'], 'the per-call payment alone: no wallet to name a delegate for');
 assert.ok(unpaid.headers.has('payment-required'));
 const [{ payTo, extra }] = error.accepts;
 const before = await lc.getBalance(payTo);
 assert.equal(before.authorized, false, 'the wallet must have no delegate: run with a fresh one');
 
-console.log('\n== keyless x402 through the OpenAI SDK ==');
+console.log('\n== keyless, paid per call through the OpenAI SDK ==');
 const completion = await ask('Say hello in five words.');
 const job = (completion as unknown as { lightchain: LightchainJob }).lightchain;
 console.log(`answer: ${completion.choices[0]?.message.content}`);
@@ -79,7 +78,7 @@ assert.equal(settlement.status, 'success');
 assert.ok(isAddressEqual(settlement.from, extra.facilitatorAddress) && isAddressEqual(settlement.to!, lc.network.jobRegistry));
 const after = await lc.getBalance(payTo);
 console.log('prepaid balance after:', after);
-assert.equal(after.authorized, false, 'x402 authorized no delegate');
+assert.equal(after.authorized, false, 'paying per call authorized no delegate');
 assert.equal(before.balance - after.balance, payments[0].amount);
 
 const limit = Number(env.LIGHTCHAIN_PAYER_CONCURRENCY ?? 1);
@@ -94,4 +93,4 @@ assert.equal(refused.length, 1, 'one call refused');
 assert.ok(refused[0] instanceof OpenAI.APIError && refused[0].status === 429 && refused[0].code === 'concurrency_limit_exceeded');
 assert.equal(payments.length, 1 + limit, 'the refused call paid nothing');
 
-console.log(`\nPASS: keyless x402 job ${job.job_id} (settlement ${job.tx_hash}); ${limit} of ${limit + 1} calls at once served, one refused`);
+console.log(`\nPASS: keyless per-call job ${job.job_id} (settlement ${job.tx_hash}); ${limit} of ${limit + 1} calls at once served, one refused`);

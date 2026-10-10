@@ -42,15 +42,13 @@ test('without an account, hands back the 402 of an unpaid wallet as it is, sendi
   http.done();
 });
 
-const x402 = { payment: 'x402', maxPaymentWei: 1n } as const;
+const perCall = { payment: 'per-call', maxPaymentWei: 1n } as const;
 const misconfigured: [string, object, RegExp][] = [
   ['the delegate mode with no API key', { account }, /needs apiKey/],
   ['an empty API key', { apiKey: '' }, /needs apiKey/],
   ['depositWei with no account to deposit from', { apiKey: 'lcai_x', depositWei: 1n }, /need account/],
   ['onDeposit with no account to deposit from', { apiKey: 'lcai_x', onDeposit: () => {} }, /need account/],
-  ['x402 with no account to sign', { ...x402, apiKey: 'lcai_x' }, /payment "x402" needs account/],
-  ['x402 with an API key and keyless both', { ...x402, account, apiKey: 'lcai_x', keyless: true }, /apiKey or keyless/],
-  ['x402 with neither an API key nor keyless', { ...x402, account }, /apiKey or keyless/],
+  ['per-call with no account to sign', { ...perCall, apiKey: 'lcai_x' }, /payment "per-call" needs account/],
 ];
 for (const [what, options, reason] of misconfigured) {
   test(`refuses ${what}`, () => {

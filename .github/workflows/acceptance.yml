@@ -1,6 +1,6 @@
 # Testnet acceptance, from the wallet in TESTNET_WALLET_PRIVATE_KEY (it needs testnet LCAI).
 # pool: mints a key, tops up on the first 402, then a streaming completion and two interleaved conversations through
-# the OpenAI SDK. x402: keyless pay-per-call, from a fresh wallet that wallet funds and that sends the rest back.
+# the OpenAI SDK. per-call: keyless pay-per-call, from a fresh wallet that wallet funds and that sends the rest back.
 name: Testnet acceptance
 
 on:
@@ -35,7 +35,7 @@ jobs:
           path: acceptance-pool.log
 
   # After pool, not beside it: both send from the same wallet, and two jobs at once would race for its nonce.
-  x402:
+  per-call:
     needs: pool
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -47,7 +47,7 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - run: npm run acceptance:x402:fresh 2>&1 | tee acceptance-x402.log
+      - run: npm run acceptance:per-call:fresh 2>&1 | tee acceptance-per-call.log
         env:
           FUNDER_PRIVATE_KEY: ${{ secrets.TESTNET_WALLET_PRIVATE_KEY }}
           LIGHTCHAIN_NETWORK: testnet
@@ -55,5 +55,5 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: acceptance-x402-${{ github.run_id }}
-          path: acceptance-x402.log
+          name: acceptance-per-call-${{ github.run_id }}
+          path: acceptance-per-call.log

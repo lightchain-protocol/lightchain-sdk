@@ -1,7 +1,7 @@
 {
   "name": "@lightchainai/sdk",
   "version": "0.1.0-alpha.0",
-  "description": "The LightChain AI Developer API with an API key, through the OpenAI SDK; a wallet can top up on a 402 by itself, or pay per request with x402.",
+  "description": "The LightChain AI Developer API with an API key, through the OpenAI SDK; a wallet can top up on a 402 by itself, or pay per call (experimental).",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -26,9 +26,9 @@
     "abi": "node scripts/abi.ts",
     "openapi": "node scripts/openapi.ts",
     "acceptance": "node scripts/acceptance.ts",
-    "acceptance:x402": "node scripts/acceptance-x402.ts",
+    "acceptance:per-call": "node scripts/acceptance-per-call.ts",
     "acceptance:pool": "node scripts/acceptance-pool.ts",
-    "acceptance:x402:fresh": "node scripts/fresh-wallet.ts acceptance:x402"
+    "acceptance:per-call:fresh": "node scripts/fresh-wallet.ts acceptance:per-call"
   },
   "dependencies": {
     "viem": "^2.47.6"

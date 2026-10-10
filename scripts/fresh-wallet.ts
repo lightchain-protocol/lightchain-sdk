@@ -2,10 +2,10 @@
 // that never authorized a delegate) and must still run every night. FUNDER_PRIVATE_KEY's wallet funds it. After the
 // script, pass or fail, the fresh wallet withdraws its prepaid balance and sends all it holds back to the funder.
 //
-//   FUNDER_PRIVATE_KEY=0x... LIGHTCHAIN_MODEL=gemma4:e2b node scripts/fresh-wallet.ts acceptance:x402
+//   FUNDER_PRIVATE_KEY=0x... LIGHTCHAIN_MODEL=gemma4:e2b node scripts/fresh-wallet.ts acceptance:per-call
 //
 // The fresh key exists only in this process and the script's environment. LIGHTCHAIN_FUND_WEI (default 0.11 LCAI:
-// acceptance:x402's 0.1 deposit, plus gas) is what a run killed before the sweep leaves behind. LIGHTCHAIN_NETWORK
+// acceptance:per-call's 0.1 deposit, plus gas) is what a run killed before the sweep leaves behind. LIGHTCHAIN_NETWORK
 // picks the network (default testnet).
 import { spawnSync } from 'node:child_process';
 import { createPublicClient, createWalletClient, defineChain, formatEther, type Hex, http, parseAbi } from 'viem';
