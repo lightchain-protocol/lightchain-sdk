@@ -93,6 +93,33 @@ Before signing, the SDK checks the requirements against the network it was given
 - **The modes do not mix.** Per-call mode never sends `depositAndAuthorize`, and the default mode never signs a per-call payment.
 - **A refused payment comes back as the API answered it** (for example `402` `insufficient_funds`, or `invalid_prepaid_debit_payload_expired`), with the reason as `error.code`. The SDK does not pay it again. The Developer API's Payment page lists the codes and what to do about each.
 
+### From a browser wallet
+
+In a web page, the visitor's wallet signs each payment instead of a key in your code. Give `account` the wallet's address as a viem JSON-RPC account, and `transport` the wallet. Every paid call then asks the wallet for one signature (`eth_signTypedData_v4`). It sends no transaction, costs no gas, and the payment is the same one a local key signs.
+
+```ts
+import OpenAI from "openai";
+import { custom } from "viem";
+import { Lightchain } from "@lightchainai/sdk";
+
+const [address] = await window.ethereum.request({ method: "eth_requestAccounts" });
+const lc = new Lightchain({
+  network: "testnet",
+  account: { address, type: "json-rpc" },
+  transport: custom(window.ethereum), // the wallet: it signs each payment
+  payment: "per-call",
+  maxPaymentWei: 5n * 10n ** 16n,
+});
+
+const openai = new OpenAI({ baseURL: lc.baseURL, apiKey: lc.apiKey, fetch: lc.fetch, dangerouslyAllowBrowser: true });
+```
+
+- **Put the wallet on the network's chain first** (testnet `8200`, mainnet `9200`), with `wallet_switchEthereumChain`, or `wallet_addEthereumChain` for a wallet that doesn't know it. Wallets such as MetaMask refuse to sign typed data for a chain other than the one they are on.
+- **A rejected signature** comes back as the 402, its `error.message` starting `Not paid by the SDK: User rejected the request.`
+- **The authorization's clock starts when the 402 arrives,** not when the visitor approves: a signature approved more than `maxTimeoutSeconds` later is refused `invalid_prepaid_debit_payload_expired`.
+- **One address per client.** The address is fixed when the client is made: when the visitor switches accounts, make a new `Lightchain`. Its chain reads, such as `getBalance`, go through the wallet too.
+- **Not a smart account.** The JobRegistry takes only an ECDSA signature by the payer's own key, which a smart account can't make.
+
 ## Members
 
 | Mode | `apiKey` | `account` |
@@ -140,6 +167,6 @@ FUNDER_PRIVATE_KEY=0x... LIGHTCHAIN_MODEL=gemma4:e2b npm run acceptance:per-call
 WALLET_PRIVATE_KEY=0x... npm run acceptance:pool   # streaming, and two interleaved conversations in one pooled session
 ```
 
-The fixtures in `test/fixtures` were recorded from a local devnet with Foundry's publicly known test account 7. The per-call tests sign the scheme's test vectors (`test/fixtures/x402-vectors.json`) byte for byte, with Foundry's test account 3. Never use either key on a real network.
+The fixtures in `test/fixtures` were recorded from a local devnet with Foundry's publicly known test account 7. The per-call tests sign the scheme's test vectors (`test/fixtures/x402-vectors.json`) byte for byte, with Foundry's test account 3, as a local key and through a stand-in browser wallet. Never use either key on a real network.
 
 CI (`.github/workflows/ci.yml`) typechecks, builds and tests every pull request and every push to `main`. `acceptance.yml` runs `acceptance:pool`, then `acceptance:per-call:fresh`, against testnet every night at 03:17 UTC, and on demand from the Actions tab. It pays from the wallet in the `TESTNET_WALLET_PRIVATE_KEY` secret, which needs testnet LCAI. `acceptance:per-call:fresh` (`scripts/fresh-wallet.ts`) runs `acceptance:per-call` with a wallet made for that run, which the secret's wallet funds and which sends what it has left back: `acceptance:per-call` needs a wallet that never authorized a delegate. Each run's log is kept as an artifact.

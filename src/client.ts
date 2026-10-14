@@ -9,6 +9,7 @@ import {
   http,
   isAddress,
   isAddressEqual,
+  type JsonRpcAccount,
   type LocalAccount,
   type PublicClient,
   type Transport,
@@ -65,8 +66,12 @@ type PerCallPayment = {
    * per-payer limits.
    */
   apiKey?: string;
-  /** A viem local account: it signs every payment. */
-  account: LocalAccount;
+  /**
+   * The viem account that signs every payment: a local account, or a browser
+   * wallet's JSON-RPC account, `{ address, type: 'json-rpc' }`, whose wallet
+   * is `transport` (`custom(window.ethereum)`).
+   */
+  account: Signer;
   /** The most one request may pay, in wei. A 402 asking for more is not paid. */
   maxPaymentWei: bigint;
   /** Told of every payment the server settled. */
@@ -74,6 +79,13 @@ type PerCallPayment = {
   depositWei?: never;
   onDeposit?: never;
 };
+
+/**
+ * The account behind the client: a local one signs by itself, a JSON-RPC one
+ * through `transport`, its wallet. Not a smart account: the JobRegistry takes
+ * only an ECDSA signature by the payer's own key.
+ */
+type Signer = LocalAccount | JsonRpcAccount;
 
 /** A depositAndAuthorize the SDK sent on a 402. */
 export type Deposit = { hash: Hex; value: bigint; delegate: Address };
@@ -163,10 +175,9 @@ export class Lightchain {
   /** The OpenAI-compatible base URL, for the OpenAI SDK's `baseURL`. */
   readonly baseURL: string;
   readonly #apiKey: string;
-  readonly #account: LocalAccount | undefined;
   readonly #fetch: typeof fetch;
   readonly #publicClient: PublicClient;
-  readonly #walletClient: WalletClient<Transport, Chain, LocalAccount> | undefined;
+  readonly #walletClient: WalletClient<Transport, Chain, Signer> | undefined;
   readonly #registry: { address: Address; abi: typeof jobRegistryAbi };
   /** How a 402 is paid: by a transaction (delegate) or by a signature (per-call), never both. */
   readonly #payment: 'delegate' | 'per-call';
@@ -180,7 +191,6 @@ export class Lightchain {
 
   constructor(options: LightchainOptions) {
     this.network = typeof options.network === 'string' ? networks[options.network] : options.network;
-    this.#account = options.account;
     this.address = options.account?.address;
     this.baseURL = `${this.network.apiUrl}/v1`;
     // Called unbound: a browser's fetch refuses any other `this`.
@@ -278,9 +288,9 @@ export class Lightchain {
     init = { ...init, headers };
     const again = input instanceof Request ? input.clone() : input;
     const response = await this.#fetch(input, init);
-    const account = this.#account;
+    const wallet = this.#walletClient;
     // No account, nothing to pay with: the 402 goes to the caller, and a human tops up in the chat.
-    if (response.status !== 402 || !account) return response;
+    if (response.status !== 402 || !wallet) return response;
     const body = (await response.clone().json().catch(() => null)) as PaymentRequired | null;
     const perCall = this.#payment === 'per-call';
     const accepts = body?.error?.accepts ?? [];
@@ -291,9 +301,9 @@ export class Lightchain {
     let payment = '';
     try {
       if (!accept) throw new Error('payment is "per-call", and the 402 offers no prepaid-debit payment.');
-      if (perCall) payment = await this.#signPayment(account, accept as X402Accept);
+      if (perCall) payment = await this.#signPayment(wallet, accept as X402Accept);
       else {
-        const deposit = this.#checkDelegateOffer(account, accept as DelegateAccept);
+        const deposit = this.#checkDelegateOffer(wallet.account, accept as DelegateAccept);
         const hash = await this.depositAndAuthorize(deposit.delegate, deposit.value);
         this.#onDeposit?.({ hash, ...deposit });
       }
@@ -337,7 +347,7 @@ export class Lightchain {
   }
 
   /** Sends a transaction once the one before it is done, and waits for it to succeed. */
-  #send(name: string, write: (wallet: WalletClient<Transport, Chain, LocalAccount>) => Promise<Hex>): Promise<Hex> {
+  #send(name: string, write: (wallet: WalletClient<Transport, Chain, Signer>) => Promise<Hex>): Promise<Hex> {
     const wallet = this.#walletClient;
     if (!wallet) return Promise.reject(new Error(`${name} needs account: the wallet that sends it.`));
     // One at a time: each transaction reads the account's nonce, so two sent
@@ -368,7 +378,7 @@ export class Lightchain {
   }
 
   /** The deposit a 402's delegate offer asks for, once it names this network's JobRegistry and the account as payer. */
-  #checkDelegateOffer(account: LocalAccount, accept: DelegateAccept): { delegate: Address; value: bigint } {
+  #checkDelegateOffer(account: Signer, accept: DelegateAccept): { delegate: Address; value: bigint } {
     const { chain_id, payer, delegate, instruction } = accept;
     if (chain_id !== this.network.chainId) throw new Error(`the 402 is for chain ${chain_id}, not ${this.network.chainId}.`);
     if (!sameAddress(payer, account.address)) throw new Error(`the key belongs to another wallet (${payer}), not ${account.address}.`);
@@ -392,9 +402,10 @@ export class Lightchain {
    * The PAYMENT-SIGNATURE for a 402's prepaid-debit requirements, once they
    * name this network, its JobRegistry and the scheme's domain, and ask for
    * at most maxPaymentWei: a debit authorization of that amount, valid for
-   * maxTimeoutSeconds, with a fresh random nonce.
+   * maxTimeoutSeconds, with a fresh random nonce. The wallet client signs it:
+   * a local account by itself, a JSON-RPC one by eth_signTypedData_v4 to its wallet.
    */
-  async #signPayment(account: LocalAccount, accept: X402Accept): Promise<string> {
+  async #signPayment(wallet: WalletClient<Transport, Chain, Signer>, accept: X402Accept): Promise<string> {
     const { network, asset, amount, payTo, maxTimeoutSeconds: timeout, extra } = accept;
     const chain = `eip155:${this.network.chainId}`;
     if (network !== chain) throw new Error(`the 402 is for network ${network}, not ${chain}.`);
@@ -417,8 +428,8 @@ export class Lightchain {
     // The cap is the amount asked, not maxPaymentWei: the server debits the fee, at most the cap.
     const deadline = BigInt(Math.floor(Date.now() / 1000) + timeout);
     const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
-    const message = { payer: account.address, payTo, facilitator, maxAmount, deadline, nonce };
-    const signature = await account.signTypedData({
+    const message = { payer: wallet.account.address, payTo, facilitator, maxAmount, deadline, nonce };
+    const signature = await wallet.signTypedData({
       domain: { ...DEBIT_DOMAIN, chainId: this.network.chainId, verifyingContract: this.network.jobRegistry },
       types: DEBIT_AUTHORIZATION,
       primaryType: 'DebitAuthorization',

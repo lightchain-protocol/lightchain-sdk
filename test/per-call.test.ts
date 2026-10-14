@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { type TestContext, test } from 'node:test';
-import { type Hex, hexToBytes } from 'viem';
+import { custom, type Hex, hexToBytes } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { Lightchain, type LightchainOptions, networks, type Payment } from '../src/index.ts';
 import vectors from './fixtures/x402-vectors.json' with { type: 'json' };
@@ -52,6 +52,26 @@ const perCall = (fetch: typeof globalThis.fetch, transport = replayRpc([]).trans
 });
 const networkOf = (v: Vector) => (v.chain.chainId === networks.mainnet.chainId ? 'mainnet' : 'testnet');
 
+/**
+ * A browser wallet (an EIP-1193 provider, as window.ethereum is), as a viem
+ * transport, with its JSON-RPC account: it signs the typed data it is sent
+ * with the payer's key, or, when its user rejects, refuses as MetaMask does.
+ * `sent` keeps every call made.
+ */
+function browserWallet({ rejects = false } = {}) {
+  const payer = privateKeyToAccount(payerKey);
+  const sent: { method: string; params: unknown[] }[] = [];
+  const transport = custom({
+    async request({ method, params }: { method: string; params: unknown[] }) {
+      sent.push({ method, params });
+      assert.equal(method, 'eth_signTypedData_v4', `unexpected RPC call ${method}`);
+      if (rejects) throw Object.assign(new Error('MetaMask Tx Signature: User denied message signature.'), { code: 4001 });
+      return payer.signTypedData(JSON.parse(params[1] as string));
+    },
+  });
+  return { account: { address: payer.address, type: 'json-rpc' } as const, transport, sent };
+}
+
 // The vectors whose payload is the one the SDK builds from their requirements:
 // the payer's key, maxAmount = amount, deadline = now + maxTimeoutSeconds. The
 // others carry a payload another signer got wrong (another payer, cap,
@@ -85,6 +105,41 @@ for (const name of signedBySdk) {
     http.done();
   });
 }
+
+for (const name of signedBySdk) {
+  test(`with a browser wallet, signs the ${name} vector byte for byte, in one eth_signTypedData_v4 for the payer`, async (t) => {
+    const v = vector(name);
+    signAs(t, v);
+    const http = replayHttp([paymentRequired(v.paymentRequirements), completed]);
+    const wallet = browserWallet();
+    const lc = new Lightchain({ network: networkOf(v), ...perCall(http.fetch, wallet.transport), account: wallet.account });
+
+    const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(paymentOf(http.sent[1]), v.paymentPayload);
+    assert.deepEqual(
+      wallet.sent.map(({ method, params }) => [method, params[0]]),
+      [['eth_signTypedData_v4', wallet.account.address]],
+      'one signature request, no transaction',
+    );
+    http.done();
+  });
+}
+
+test('when the browser wallet user rejects the signature, hands back the 402 with the reason, sending nothing again', async () => {
+  const http = replayHttp([paymentRequired(vector('valid-testnet').paymentRequirements)]);
+  const wallet = browserWallet({ rejects: true });
+  const lc = new Lightchain({ network: 'testnet', ...perCall(http.fetch, wallet.transport), account: wallet.account });
+
+  const response = await lc.fetch(`${lc.baseURL}/chat/completions`, request);
+
+  assert.equal(response.status, 402);
+  const { error } = (await response.json()) as { error: { message: string } };
+  assert.match(error.message, /^Not paid by the SDK: User rejected the request\./);
+  assert.match(error.message, /User denied message signature\./, "the wallet's own reason too");
+  http.done();
+});
 
 const refusedVectors: [string, RegExp][] = [
   ['unsupported-network', /network eip155:1, not eip155:8200/],
