@@ -1,6 +1,6 @@
 {
   "name": "@lightchainai/sdk",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "The LightChain AI Developer API with an API key, through the OpenAI SDK; a wallet can top up on a 402 by itself, or pay per call (experimental).",
   "license": "MIT",
   "repository": {
@@ -14,7 +14,9 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=18"
   },
