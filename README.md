@@ -2,6 +2,8 @@
 
 The LightChain AI Developer API for TypeScript: it runs an API key against the right network, and, given a wallet, pays for calls by itself: it tops up the prepaid balance on a `402` (the default mode), or signs each call's own payment (per-call mode, experimental). Completions go through the OpenAI SDK: the Developer API is OpenAI-compatible.
 
+The Developer API itself, its payment paths, limits and errors are documented at [docs.lightchain.ai](https://docs.lightchain.ai/docs/developer-api/overview), and its OpenAPI document is served at `https://chat-api.testnet.lightchain.ai/docs/json`.
+
 ```sh
 npm install @lightchainai/sdk openai
 ```
