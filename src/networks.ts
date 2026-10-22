@@ -11,7 +11,6 @@ export type Network = {
 };
 
 export const networks = {
-  // The mainnet Developer API is not live yet, and its URL may change.
   mainnet: {
     chainId: 9200,
     apiUrl: 'https://chat-api.mainnet.lightchain.ai',
