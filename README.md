@@ -150,7 +150,7 @@ The constructor throws on any other combination, and on an option the mode would
 | | Chain | API (`apiUrl`) | RPC | JobRegistry |
 | --- | --- | --- | --- | --- |
 | `mainnet` | 9200 | `https://chat-api.mainnet.lightchain.ai` | `https://rpc.mainnet.lightchain.ai` | `0xfB15F90298e4CcD7106E76fFB5e520315cC42B0b` |
-| `testnet` | 8200 | `https://chat-api.testnet.lightchain.ai` | `https://rpc.testnet.lightchain.ai` | `0x531b3A87c5D785441B9cF55b98169F20FD9056a7` |
+| `testnet` | 8200 | `https://chat-api.testnet.lightchain.ai` | `https://rpc.testnet.lightchain.ai` | `0xD09482621a7D7df81E69fDB8F14961c0BfbaF63D` |
 
 Both networks serve the same Developer API: API keys and paying per call with LCAI from the prepaid balance.
 

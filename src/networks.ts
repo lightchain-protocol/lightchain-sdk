@@ -21,6 +21,6 @@ export const networks = {
     chainId: 8200,
     apiUrl: 'https://chat-api.testnet.lightchain.ai',
     rpcUrl: 'https://rpc.testnet.lightchain.ai',
-    jobRegistry: '0x531b3A87c5D785441B9cF55b98169F20FD9056a7',
+    jobRegistry: '0xD09482621a7D7df81E69fDB8F14961c0BfbaF63D',
   },
 } as const satisfies Record<string, Network>;
